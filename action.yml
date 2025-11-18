@@ -1,0 +1,77 @@
+name: 'Validate PowerOn'
+description: 'GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform'
+author: 'libum-llc'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  symitar-hostname:
+    description: 'The endpoint by which you connect to the Symitar host'
+    required: true
+
+  sym-number:
+    description: 'The directory (aka Sym) number for your connection'
+    required: true
+
+  symitar-user-number:
+    description: 'Your Symitar Quest user number (just the number)'
+    required: true
+
+  symitar-user-password:
+    description: 'Your Symitar Quest password (just the password)'
+    required: true
+
+  ssh-username:
+    description: 'The AIX user name for the Symitar host'
+    required: true
+
+  ssh-password:
+    description: 'The AIX password for the Symitar host'
+    required: true
+
+  ssh-port:
+    description: 'The port to connect to the SSH server'
+    required: false
+    default: '22'
+
+  api-key:
+    description: 'Your PowerOn Pipelines API Key from Libum Portal (https://portal.libum.io)'
+    required: true
+
+  symitar-app-port:
+    description: 'The port which your SymAppServer communicates over. This is typically 42 + symNumber'
+    required: false
+
+  connection-type:
+    description: 'Connection type: "https" or "ssh" (default: ssh)'
+    required: false
+    default: 'ssh'
+
+  poweron-directory:
+    description: 'The directory in the repository to monitor PowerOn changes in'
+    required: false
+    default: 'REPWRITERSPECS/'
+
+  target-branch:
+    description: 'Target branch to compare against for changed files (e.g., origin/main)'
+    required: false
+
+  validate-ignore:
+    description: 'Comma-separated list of PowerOn filenames to ignore during validation'
+    required: false
+    default: ''
+
+outputs:
+  files-validated:
+    description: 'Number of PowerOn files validated'
+
+  files-passed:
+    description: 'Number of PowerOn files that passed validation'
+
+  files-failed:
+    description: 'Number of PowerOn files that failed validation'
+
+runs:
+  using: node20
+  main: dist/index.js

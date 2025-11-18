@@ -1,0 +1,65 @@
+name: publish
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+      -
+        name: Get version from package.json
+        id: package-version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+      -
+        name: Check if release exists
+        id: check-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view v${{ steps.package-version.outputs.version }} >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.package-version.outputs.version }} already exists. Skipping publish."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "No existing release found. Will publish v${{ steps.package-version.outputs.version }}"
+          fi
+      -
+        name: Create and push tag
+        if: steps.check-release.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a v${{ steps.package-version.outputs.version }} -m "Release v${{ steps.package-version.outputs.version }}"
+          git push origin v${{ steps.package-version.outputs.version }}
+      -
+        name: Update major version tag
+        if: steps.check-release.outputs.exists == 'false'
+        run: |
+          MAJOR_VERSION=$(echo ${{ steps.package-version.outputs.version }} | cut -d. -f1)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -fa v$MAJOR_VERSION -m "Update v$MAJOR_VERSION to ${{ steps.package-version.outputs.tag }}"
+          git push origin v$MAJOR_VERSION --force
+      -
+        name: Create GitHub Release
+        if: steps.check-release.outputs.exists == 'false'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.package-version.outputs.tag }}
+          release_name: ${{ steps.package-version.outputs.tag }}
+          draft: false
+          prerelease: false

@@ -1,0 +1,13 @@
+node_modules/
+lib/
+*.log
+.env
+.DS_Store
+coverage/
+.eslintcache
+.npmrc
+dist/*.d.ts
+dist/*.d.ts.map
+dist/pagent.exe
+dist/build/
+dist/lib/

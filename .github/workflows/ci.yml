@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+      -
+        name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: latest-9
+      -
+        name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@libum-llc'
+      -
+        name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NGUYENDON_GITHUB_TOKEN }}
+      -
+        name: Lint
+        run: pnpm lint
+      -
+        name: Test
+        run: pnpm test
+      -
+        name: Build
+        run: pnpm build
+      -
+        name: Check dist
+        run: |
+          find dist -type f -exec sha256sum {} \; | sort > /tmp/dist-before.txt
+          pnpm build
+          find dist -type f -exec sha256sum {} \; | sort > /tmp/dist-after.txt
+          if ! diff -q /tmp/dist-before.txt /tmp/dist-after.txt > /dev/null; then
+            echo "Error: dist/ directory is out of sync with the build"
+            echo "Please run 'pnpm build' and commit the changes"
+            echo ""
+            echo "Differences:"
+            diff /tmp/dist-before.txt /tmp/dist-after.txt || true
+            exit 1
+          fi
+          echo "dist/ is up to date"
