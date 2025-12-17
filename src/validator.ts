@@ -19,6 +19,7 @@ export interface ValidationConfig {
   targetBranch?: string;
   ignoreList: string[];
   logPrefix: string;
+  debug?: boolean;
 }
 
 export interface ValidationResult {
@@ -150,7 +151,8 @@ async function validateWithHTTPs(
     password: config.sshPassword,
   };
 
-  const client = new SymitarHTTPs(baseUrl, symitarConfig, 'info', sshConfig);
+  const logLevel = config.debug ? 'debug' : 'info';
+  const client = new SymitarHTTPs(baseUrl, symitarConfig, logLevel, sshConfig);
 
   try {
     const errors: string[] = [];
@@ -198,7 +200,8 @@ async function validateWithSSH(
     password: config.sshPassword,
   };
 
-  const client = new SymitarSSH(sshConfig, 'warn');
+  const logLevel = config.debug ? 'debug' : 'warn';
+  const client = new SymitarSSH(sshConfig, logLevel);
   await client.isReady;
 
   try {
