@@ -35,7 +35,9 @@ describe('subscription', () => {
     });
 
     it('should reject when API key is empty', async () => {
-      await expect(validateApiKey('', 'test-host.example.com')).rejects.toThrow(AuthenticationError);
+      await expect(validateApiKey('', 'test-host.example.com')).rejects.toThrow(
+        AuthenticationError,
+      );
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
