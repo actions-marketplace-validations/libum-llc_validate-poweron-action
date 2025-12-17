@@ -84422,17 +84422,18 @@ exports.ConnectionError = ConnectionError;
  * Validates the provided API key against License API for active subscription.
  *
  * @param apiKey - The API key to validate
+ * @param host - The unique identifier for the host (restricted by subscription quantity)
  * @throws {AuthenticationError} When API key is invalid or subscription is not active
  * @throws {ConnectionError} When unable to connect to license server after retries
  */
-const validateApiKey = async (apiKey) => {
+const validateApiKey = async (apiKey, host) => {
     const logPrefix = '[ValidateSubscription]';
-    console.info(`${logPrefix} Validating API key`);
+    console.info(`${logPrefix} Validating API key for host: ${host}`);
     if (!apiKey || !apiKey.trim()) {
         console.error(`${logPrefix} No API key provided. Please make sure 'apiKey' is set properly in your workflow.`);
-        throw new AuthenticationError('PowerOn Pipelines API Key is missing', apiKey, '');
+        throw new AuthenticationError('PowerOn Pipelines API Key is missing', apiKey, host);
     }
-    const url = `https://${sstStagePrefix}license${isSandbox ? '.libum-sandbox' : ''}.libum.io/subscriptionsByApiKey?product=poweron-pipelines`;
+    const url = `https://${sstStagePrefix}license${isSandbox ? '.libum-sandbox' : ''}.libum.io/subscriptionsByApiKey?product=poweron-pipelines&unit=${host}`;
     for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
@@ -84447,18 +84448,22 @@ const validateApiKey = async (apiKey) => {
             });
             if (!response.ok) {
                 console.error(`${logPrefix} Failed to validate API key. Status: ${response.status}, Message: ${response.statusText}`);
-                throw new AuthenticationError(`Failed to validate API key: ${response.status} ${response.statusText}`, apiKey, '');
+                throw new AuthenticationError(`Failed to validate API key: ${response.status} ${response.statusText}`, apiKey, host);
             }
             const data = await response.json();
             // Validate response structure with type guard
             if (!isSubscriptionResponse(data)) {
-                throw new AuthenticationError('Invalid response format from license server', apiKey, '');
+                throw new AuthenticationError('Invalid response format from license server', apiKey, host);
             }
             if (!data.isFound) {
-                throw new AuthenticationError(`Provided API key was not found. Please make sure 'apiKey' is set properly in your workflow.`, apiKey, '');
+                throw new AuthenticationError(`Provided API key was not found. Please make sure 'apiKey' is set properly in your workflow.`, apiKey, host);
             }
             if (data.subscriptions.length === 0) {
-                throw new AuthenticationError(`No active subscription found for the provided API key.`, apiKey, '');
+                throw new AuthenticationError(`No active subscription found for the provided API key.`, apiKey, host);
+            }
+            // Check if maximum hosts exceeded
+            if (data.isMaxHostsExceeded) {
+                throw new AuthenticationError(`Provided API key has reached the maximum number of hosts allowed for the subscription. Please upgrade your subscription or remove unused hosts.`, apiKey, host);
             }
             console.info(`${logPrefix} API key validation successful`);
             return;
@@ -84622,10 +84627,8 @@ async function validateWithHTTPs(config, files) {
         symNumber: parseInt(config.symNumber, 10),
         symitarUserNumber: config.symitarUserNumber,
         symitarUserPassword: config.symitarUserPassword,
-        apiKey: config.apiKey,
     };
     const sshConfig = {
-        host: config.symitarHostname,
         port: config.sshPort,
         username: config.sshUsername,
         password: config.sshPassword,
@@ -84672,14 +84675,13 @@ async function validateWithSSH(config, files) {
         username: config.sshUsername,
         password: config.sshPassword,
     };
-    const client = new symitar_1.SymitarSSH(sshConfig);
+    const client = new symitar_1.SymitarSSH(sshConfig, 'warn');
     await client.isReady;
     try {
         const symitarConfig = {
             symNumber: parseInt(config.symNumber, 10),
             symitarUserNumber: config.symitarUserNumber,
             symitarUserPassword: config.symitarUserPassword,
-            apiKey: config.apiKey,
         };
         const worker = await client.createValidateWorker(symitarConfig);
         const errors = [];
@@ -84718,7 +84720,7 @@ async function validateWithSSH(config, files) {
 async function validatePowerOns(config) {
     // Validate API key
     core.info(`${config.logPrefix} Validating API key...`);
-    await (0, subscription_1.validateApiKey)(config.apiKey);
+    await (0, subscription_1.validateApiKey)(config.apiKey, config.symitarHostname);
     core.info(`${config.logPrefix} API key validation successful`);
     // Get changed files
     const files = await getChangedFiles(config.targetBranch, config.poweronDirectory, config.ignoreList);

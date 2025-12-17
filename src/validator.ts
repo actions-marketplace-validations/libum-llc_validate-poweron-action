@@ -142,11 +142,9 @@ async function validateWithHTTPs(
     symNumber: parseInt(config.symNumber, 10),
     symitarUserNumber: config.symitarUserNumber,
     symitarUserPassword: config.symitarUserPassword,
-    apiKey: config.apiKey,
   };
 
   const sshConfig = {
-    host: config.symitarHostname,
     port: config.sshPort,
     username: config.sshUsername,
     password: config.sshPassword,
@@ -200,7 +198,7 @@ async function validateWithSSH(
     password: config.sshPassword,
   };
 
-  const client = new SymitarSSH(sshConfig);
+  const client = new SymitarSSH(sshConfig, 'warn');
   await client.isReady;
 
   try {
@@ -208,7 +206,6 @@ async function validateWithSSH(
       symNumber: parseInt(config.symNumber, 10),
       symitarUserNumber: config.symitarUserNumber,
       symitarUserPassword: config.symitarUserPassword,
-      apiKey: config.apiKey,
     };
 
     const worker = await client.createValidateWorker(symitarConfig);
@@ -250,7 +247,7 @@ async function validateWithSSH(
 export async function validatePowerOns(config: ValidationConfig): Promise<ValidationResult> {
   // Validate API key
   core.info(`${config.logPrefix} Validating API key...`);
-  await validateApiKey(config.apiKey);
+  await validateApiKey(config.apiKey, config.symitarHostname);
   core.info(`${config.logPrefix} API key validation successful`);
 
   // Get changed files

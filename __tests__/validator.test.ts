@@ -154,17 +154,19 @@ describe('validator', () => {
 
       const result = await validatePowerOns(baseConfig);
 
-      expect(SymitarSSH).toHaveBeenCalledWith({
-        host: 'test.symitar.example.com',
-        port: 22,
-        username: 'sshuser',
-        password: 'sshpass',
-      });
+      expect(SymitarSSH).toHaveBeenCalledWith(
+        {
+          host: 'test.symitar.example.com',
+          port: 22,
+          username: 'sshuser',
+          password: 'sshpass',
+        },
+        'warn',
+      );
       expect(mockSSHClient.createValidateWorker).toHaveBeenCalledWith({
         symNumber: 1,
         symitarUserNumber: '1234',
         symitarUserPassword: 'password',
-        apiKey: 'test-api-key',
       });
       expect(mockWorker.validatePowerOn).toHaveBeenCalledWith('REPWRITERSPECS/TEST.PO');
       expect(mockSSHClient.end).toHaveBeenCalled();
@@ -233,11 +235,9 @@ describe('validator', () => {
           symNumber: 1,
           symitarUserNumber: '1234',
           symitarUserPassword: 'password',
-          apiKey: 'test-api-key',
         },
         'info',
         {
-          host: 'test.symitar.example.com',
           port: 22,
           username: 'sshuser',
           password: 'sshpass',
@@ -341,7 +341,10 @@ describe('validator', () => {
 
       await validatePowerOns(baseConfig);
 
-      expect(subscription.validateApiKey).toHaveBeenCalledWith('test-api-key');
+      expect(subscription.validateApiKey).toHaveBeenCalledWith(
+        'test-api-key',
+        'test.symitar.example.com',
+      );
     });
 
     // Note: These tests verify error handling behavior when API validation fails
