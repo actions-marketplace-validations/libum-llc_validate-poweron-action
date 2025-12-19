@@ -89,14 +89,7 @@ describe('validator', () => {
       // Should use find with all PowerOn extensions
       expect(mockExec).toHaveBeenCalledWith(
         'find',
-        expect.arrayContaining([
-          'REPWRITERSPECS/',
-          '-type',
-          'f',
-          '(',
-          '-iname',
-          '*.PO',
-        ]),
+        expect.arrayContaining(['REPWRITERSPECS/', '-type', 'f', '(', '-iname', '*.PO']),
         expect.any(Object),
       );
       expect(result.filesValidated).toBe(2);
