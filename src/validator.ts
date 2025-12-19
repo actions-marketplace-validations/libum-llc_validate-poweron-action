@@ -217,10 +217,12 @@ async function validateWithSSH(
     const validatedFiles: string[] = [];
     let filesFailed = 0;
 
+    // Process files sequentially - worker maintains state and resets after each validation
     for (const file of files) {
       const fileName = path.basename(file.filePath);
       validatedFiles.push(fileName);
       core.info(`${config.logPrefix} Validating ${file.filePath}...`);
+
       try {
         const result = await worker.validatePowerOn(file.filePath);
         if (!result.isValid) {
@@ -228,10 +230,12 @@ async function validateWithSSH(
           const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
           errors.push(`${fileName}: ${errorMsg}`);
         }
+        core.info(`${config.logPrefix} ✓ ${fileName} validated`);
       } catch (error) {
         filesFailed++;
         const errorMsg = error instanceof Error ? error.message : String(error);
         errors.push(`${fileName}: ${errorMsg}`);
+        core.info(`${config.logPrefix} ✗ ${fileName} failed`);
       }
     }
 

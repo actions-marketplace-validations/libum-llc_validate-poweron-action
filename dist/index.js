@@ -4374,15 +4374,15 @@ module.exports = diagnostics;
 
 /***/ }),
 
-/***/ 40000:
+/***/ 24032:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getChangedFiles = void 0;
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
 const getChangedFiles = async (host, config, sshConfig, localDirectory, remoteDirectory, logger, logPrefix, syncMode = types_1.SymitarSyncMode.MIRROR) => {
     try {
         const changedFiles = await (0, helpers_1.executeRsync)({
@@ -4406,7 +4406,7 @@ exports.getChangedFiles = getChangedFiles;
 
 /***/ }),
 
-/***/ 80398:
+/***/ 21806:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4417,8 +4417,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.deployFile = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
 const appServerToFileType = {
     [types_1.SymitarAppServerFileType.POWERON]: types_1.SymitarFileType.POWERON,
     [types_1.SymitarAppServerFileType.DATAFILE]: types_1.SymitarFileType.DATAFILE,
@@ -4461,7 +4461,7 @@ exports.deployFile = deployFile;
 
 /***/ }),
 
-/***/ 38761:
+/***/ 85193:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4474,7 +4474,7 @@ exports.downloadFile = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs_1 = __importDefault(__nccwpck_require__(79896));
 const os_1 = __importDefault(__nccwpck_require__(70857));
-const types_1 = __nccwpck_require__(50336);
+const types_1 = __nccwpck_require__(95328);
 const appServerToFileType = {
     [types_1.SymitarAppServerFileType.POWERON]: types_1.SymitarFileType.POWERON,
     [types_1.SymitarAppServerFileType.DATAFILE]: types_1.SymitarFileType.DATAFILE,
@@ -4528,14 +4528,14 @@ exports.downloadFile = downloadFile;
 
 /***/ }),
 
-/***/ 67150:
+/***/ 98190:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.executePowerOn = executePowerOn;
-const types_1 = __nccwpck_require__(50336);
+const types_1 = __nccwpck_require__(95328);
 async function executePowerOn(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, options) {
     return executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, undefined, undefined, options);
 }
@@ -4664,7 +4664,7 @@ function sleep(ms) {
 
 /***/ }),
 
-/***/ 24430:
+/***/ 94574:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4675,8 +4675,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.installPowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
 const installPowerOn = async (client, localFilePath, logger, logPrefix) => {
     const body = await (0, helpers_1.convertFileToBinary)(localFilePath);
     const fileName = path_1.default.basename(localFilePath);
@@ -4702,7 +4702,7 @@ exports.installPowerOn = installPowerOn;
 
 /***/ }),
 
-/***/ 53723:
+/***/ 99643:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4714,21 +4714,21 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarHTTPs = void 0;
 const https_1 = __importDefault(__nccwpck_require__(65692));
 const axios_1 = __importDefault(__nccwpck_require__(27455));
-const helpers_1 = __nccwpck_require__(59884);
-const logging_1 = __nccwpck_require__(61984);
-const ssh_1 = __nccwpck_require__(18855);
-const types_1 = __nccwpck_require__(50336);
-const https_deploy_1 = __nccwpck_require__(80398);
-const https_download_1 = __nccwpck_require__(38761);
-const https_install_1 = __nccwpck_require__(24430);
-const https_list_1 = __nccwpck_require__(77802);
-const https_remove_1 = __nccwpck_require__(24293);
-const https_synchronize_1 = __nccwpck_require__(4555);
-const https_validate_1 = __nccwpck_require__(75031);
-const https_uninstall_1 = __nccwpck_require__(72143);
-const https_changes_1 = __nccwpck_require__(40000);
-const https_execute_1 = __nccwpck_require__(67150);
-const https_reports_1 = __nccwpck_require__(61438);
+const helpers_1 = __nccwpck_require__(53708);
+const logging_1 = __nccwpck_require__(36640);
+const ssh_1 = __nccwpck_require__(52583);
+const types_1 = __nccwpck_require__(95328);
+const https_deploy_1 = __nccwpck_require__(21806);
+const https_download_1 = __nccwpck_require__(85193);
+const https_install_1 = __nccwpck_require__(94574);
+const https_list_1 = __nccwpck_require__(17405);
+const https_remove_1 = __nccwpck_require__(80549);
+const https_synchronize_1 = __nccwpck_require__(38603);
+const https_validate_1 = __nccwpck_require__(60215);
+const https_uninstall_1 = __nccwpck_require__(36687);
+const https_changes_1 = __nccwpck_require__(24032);
+const https_execute_1 = __nccwpck_require__(98190);
+const https_reports_1 = __nccwpck_require__(5662);
 https_1.default.globalAgent.options.rejectUnauthorized = false;
 const DEFAULT_REQUEST_TIMEOUT = 60000;
 class SymitarHTTPs {
@@ -4828,15 +4828,15 @@ exports.SymitarHTTPs = SymitarHTTPs;
 
 /***/ }),
 
-/***/ 77802:
+/***/ 17405:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.listFiles = exports.listPowerOns = void 0;
-const types_1 = __nccwpck_require__(50336);
-const ssh_list_1 = __nccwpck_require__(99241);
+const types_1 = __nccwpck_require__(95328);
+const ssh_list_1 = __nccwpck_require__(28873);
 const listPowerOns = async (client) => {
     const response = await client.post('/root/invoke', null, {
         headers: {
@@ -4866,7 +4866,7 @@ exports.listFiles = listFiles;
 
 /***/ }),
 
-/***/ 24293:
+/***/ 80549:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -4895,7 +4895,7 @@ exports.removeFile = removeFile;
 
 /***/ }),
 
-/***/ 61438:
+/***/ 5662:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -4920,18 +4920,18 @@ async function waitForBatchSequences(sshClient, config, title, timeoutSeconds, l
 
 /***/ }),
 
-/***/ 4555:
+/***/ 38603:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.synchronizeFiles = void 0;
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
-const https_validate_1 = __nccwpck_require__(75031);
-const https_install_1 = __nccwpck_require__(24430);
-const https_uninstall_1 = __nccwpck_require__(72143);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
+const https_validate_1 = __nccwpck_require__(60215);
+const https_install_1 = __nccwpck_require__(94574);
+const https_uninstall_1 = __nccwpck_require__(36687);
 const synchronizeFiles = async (client, sshClient, host, config, sshConfig, localDirectory, remoteDirectory, installPowerOnList, isDryRun, logger, logPrefix, syncMode = types_1.SymitarSyncMode.MIRROR, validateIgnoreList = []) => {
     if (syncMode === types_1.SymitarSyncMode.PULL) {
         throw new Error('Pull mode is not supported for synchronizeFiles. Use executeRsync directly for pull operations.');
@@ -5064,7 +5064,7 @@ exports.synchronizeFiles = synchronizeFiles;
 
 /***/ }),
 
-/***/ 72143:
+/***/ 36687:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -5093,7 +5093,7 @@ exports.uninstallPowerOn = uninstallPowerOn;
 
 /***/ }),
 
-/***/ 75031:
+/***/ 60215:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5104,10 +5104,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.validatePowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
-const constants_1 = __nccwpck_require__(78488);
-const https_remove_1 = __nccwpck_require__(24293);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
+const constants_1 = __nccwpck_require__(44088);
+const https_remove_1 = __nccwpck_require__(80549);
 const validatePowerOn = async (client, sshClient, config, localFilePath, isOffline, logger, logPrefix) => {
     if (isOffline && !sshClient) {
         throw new Error('Unable to validate PowerOn without SSH client');
@@ -5159,7 +5159,7 @@ exports.validatePowerOn = validatePowerOn;
 
 /***/ }),
 
-/***/ 62602:
+/***/ 82250:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -5167,8 +5167,8 @@ exports.validatePowerOn = validatePowerOn;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHExecutePowerOn = void 0;
 const rxjs_1 = __nccwpck_require__(17828);
-const types_1 = __nccwpck_require__(50336);
-const ssh_worker_1 = __nccwpck_require__(2539);
+const types_1 = __nccwpck_require__(95328);
+const ssh_worker_1 = __nccwpck_require__(69451);
 class SymitarSSHExecutePowerOn extends ssh_worker_1.SymitarSSHWorker {
     get logPrefix() {
         return `[SymitarSSHExecutePowerOn]`;
@@ -5227,7 +5227,7 @@ exports.SymitarSSHExecutePowerOn = SymitarSSHExecutePowerOn;
 
 /***/ }),
 
-/***/ 27074:
+/***/ 26402:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5273,9 +5273,9 @@ exports.SymitarSSHInstallPowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
 const rxjs_1 = __nccwpck_require__(17828);
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
-const ssh_worker_1 = __nccwpck_require__(2539);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
+const ssh_worker_1 = __nccwpck_require__(69451);
 async function sendInstallCommand(worker, powerOnName) {
     worker['setState']('executing');
     worker['send']([`${powerOnName}\r`, 'y\r']);
@@ -5326,7 +5326,7 @@ exports.SymitarSSHInstallPowerOn = SymitarSSHInstallPowerOn;
 
 /***/ }),
 
-/***/ 18855:
+/***/ 52583:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5338,17 +5338,17 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSH = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const ssh2_1 = __nccwpck_require__(41828);
-const ssh_validate_1 = __nccwpck_require__(46267);
-const ssh_transfer_1 = __nccwpck_require__(69106);
-const ssh_install_1 = __nccwpck_require__(27074);
-const ssh_uninstall_1 = __nccwpck_require__(85507);
-const ssh_execute_1 = __nccwpck_require__(62602);
-const ssh_synchronize_1 = __nccwpck_require__(49503);
-const ssh_list_1 = __nccwpck_require__(99241);
-const types_1 = __nccwpck_require__(50336);
-const helpers_1 = __nccwpck_require__(59884);
-const logging_1 = __nccwpck_require__(61984);
-const ssh_reports_1 = __nccwpck_require__(34218);
+const ssh_validate_1 = __nccwpck_require__(85659);
+const ssh_transfer_1 = __nccwpck_require__(93586);
+const ssh_install_1 = __nccwpck_require__(26402);
+const ssh_uninstall_1 = __nccwpck_require__(22915);
+const ssh_execute_1 = __nccwpck_require__(82250);
+const ssh_synchronize_1 = __nccwpck_require__(31807);
+const ssh_list_1 = __nccwpck_require__(28873);
+const types_1 = __nccwpck_require__(95328);
+const helpers_1 = __nccwpck_require__(53708);
+const logging_1 = __nccwpck_require__(36640);
+const ssh_reports_1 = __nccwpck_require__(5514);
 class SymitarSSH {
     _client = new ssh2_1.Client();
     _connected = false;
@@ -5510,14 +5510,14 @@ exports.SymitarSSH = SymitarSSH;
 
 /***/ }),
 
-/***/ 99241:
+/***/ 28873:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.listFiles = listFiles;
-const helpers_1 = __nccwpck_require__(59884);
+const helpers_1 = __nccwpck_require__(53708);
 function execCommand(client, command) {
     return new Promise((resolve, reject) => {
         client.exec(command, (err, stream) => {
@@ -5561,7 +5561,7 @@ async function listFiles(client, config, directory, logger, logPrefix) {
 
 /***/ }),
 
-/***/ 34218:
+/***/ 5514:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -5570,8 +5570,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fetchLatestReportByTitle = fetchLatestReportByTitle;
 exports.fetchReportBySequence = fetchReportBySequence;
 exports.waitForBatchSequences = waitForBatchSequences;
-const helpers_1 = __nccwpck_require__(59884);
-const scripts_1 = __nccwpck_require__(43017);
+const helpers_1 = __nccwpck_require__(53708);
+const scripts_1 = __nccwpck_require__(84265);
 const SCRIPT_DIR = '.libum';
 const DEFAULT_TIMEOUT = 30000;
 function execCommand(client, command, logger, logPrefix) {
@@ -5769,15 +5769,15 @@ async function waitForBatchSequences(client, config, title, timeoutSeconds, logg
 
 /***/ }),
 
-/***/ 49503:
+/***/ 31807:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.synchronizeFiles = exports.getChangedFiles = void 0;
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
 const getChangedFiles = async (sshConfig, symitarConfig, localDirectory, remoteDirectory, logger, syncMode = types_1.SymitarSyncMode.MIRROR) => {
     const logPrefix = '[GetChangedFiles]';
     try {
@@ -5939,7 +5939,7 @@ exports.synchronizeFiles = synchronizeFiles;
 
 /***/ }),
 
-/***/ 69106:
+/***/ 93586:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5984,8 +5984,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHTransferFile = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
-const ssh_worker_1 = __nccwpck_require__(2539);
-const helpers_1 = __nccwpck_require__(59884);
+const ssh_worker_1 = __nccwpck_require__(69451);
+const helpers_1 = __nccwpck_require__(53708);
 class SymitarSSHTransferFile extends ssh_worker_1.SymitarSSHWorker {
     get logPrefix() {
         return `[SymitarSSHTransferFile]`;
@@ -6049,15 +6049,15 @@ exports.SymitarSSHTransferFile = SymitarSSHTransferFile;
 
 /***/ }),
 
-/***/ 85507:
+/***/ 22915:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHUninstallPowerOn = void 0;
-const types_1 = __nccwpck_require__(50336);
-const ssh_worker_1 = __nccwpck_require__(2539);
+const types_1 = __nccwpck_require__(95328);
+const ssh_worker_1 = __nccwpck_require__(69451);
 const rxjs_1 = __nccwpck_require__(17828);
 class SymitarSSHUninstallPowerOn extends ssh_worker_1.SymitarSSHWorker {
     get logPrefix() {
@@ -6082,7 +6082,7 @@ exports.SymitarSSHUninstallPowerOn = SymitarSSHUninstallPowerOn;
 
 /***/ }),
 
-/***/ 46267:
+/***/ 85659:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -6128,13 +6128,34 @@ exports.SymitarSSHValidatePowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
 const rxjs_1 = __nccwpck_require__(17828);
-const ssh_worker_1 = __nccwpck_require__(2539);
-const constants_1 = __nccwpck_require__(78488);
-const helpers_1 = __nccwpck_require__(59884);
-const types_1 = __nccwpck_require__(50336);
+const ssh_worker_1 = __nccwpck_require__(69451);
+const constants_1 = __nccwpck_require__(44088);
+const helpers_1 = __nccwpck_require__(53708);
+const types_1 = __nccwpck_require__(95328);
 class SymitarSSHValidatePowerOn extends ssh_worker_1.SymitarSSHWorker {
+    _sftp = null;
     get logPrefix() {
         return `[SymitarSSHValidatePowerOn]`;
+    }
+    async getSftp() {
+        if (this._sftp)
+            return this._sftp;
+        return new Promise((resolve, reject) => {
+            this.client.sftp((err, sftp) => {
+                if (err)
+                    return reject(err);
+                this._sftp = sftp;
+                this.logger.debug(`${this.logPrefix} SFTP channel opened`);
+                resolve(sftp);
+            });
+        });
+    }
+    end() {
+        if (this._sftp) {
+            this._sftp.end();
+            this.logger.debug(`${this.logPrefix} SFTP channel closed`);
+        }
+        super.end();
     }
     handleData(data) {
         if (data.includes(types_1.SymitarCLIValidatePrompts.POWERON_FILE_NAME)) {
@@ -6144,81 +6165,75 @@ class SymitarSSHValidatePowerOn extends ssh_worker_1.SymitarSSHWorker {
     }
     async validatePowerOn(localFilePath, isOffline = true) {
         await this.isReady();
-        return new Promise((resolve, reject) => {
-            this.client.sftp((sftpError, sftp) => {
-                if (sftpError)
-                    return reject(sftpError);
-                const powerOnName = path_1.default.basename(localFilePath);
-                const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
-                const remoteFilePath = `/SYM/SYM${(0, helpers_1.paddedSymNumber)(this.config.symNumber)}/REPWRITERSPECS/${fileName}`;
-                this.logger.info(`${this.logPrefix} Validating PowerOn: ${powerOnName}`);
-                if (isOffline) {
-                    this.logger.info(`${this.logPrefix} Uploading mock PowerOn (${fileName}) in Sym ${this.config.symNumber} for validation`);
-                }
-                else {
-                    this.logger.info(`${this.logPrefix} Uploading PowerOn (${fileName}) to Sym ${this.config.symNumber}`);
-                }
-                fs.readFile(localFilePath, 'utf8', (readErr, data) => {
-                    if (readErr)
-                        return reject(readErr);
-                    const lfData = data.replace(/\r\n/g, '\n');
-                    sftp.writeFile(remoteFilePath, Buffer.from(lfData, 'utf8'), async (putError) => {
-                        if (putError)
-                            return reject(putError);
-                        this.setState('executing');
-                        this.send([`${fileName}\r`]);
-                        this.logger.info(`${this.logPrefix} Waiting for validation response...`);
-                        let lastReceivedData = '';
-                        const result = await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.tap)((d) => {
-                            lastReceivedData = d;
-                            if (d.includes(types_1.SymitarCLIValidatePrompts.FILE_DOES_NOT_EXIST)) {
-                                this.send([constants_1.ESC, '7\r']);
-                            }
-                            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_SUCH_FILE_OR_DIRECTORY)) {
-                                this.send([constants_1.ESC]);
-                            }
-                        }), (0, rxjs_1.filter)((d) => [
-                            types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND,
-                            types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE,
-                        ].some((t) => d.includes(t))), (0, rxjs_1.tap)((d) => {
-                            if (d.includes(types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE)) {
-                                this.send(['n\r', '7\r']);
-                            }
-                            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND)) {
-                                this.send(['\r', '7\r']);
-                            }
-                        }), (0, rxjs_1.timeout)({
-                            each: 60000,
-                            with: () => {
-                                const lastData = lastReceivedData
-                                    ? lastReceivedData.substring(0, 200)
-                                    : '(no data received)';
-                                throw new Error(`${this.logPrefix} Validation timed out after 60s for ${powerOnName} ` +
-                                    `(remote: ${remoteFilePath}). Last received data: ${lastData}`);
-                            },
-                        }), (0, rxjs_1.take)(1)));
-                        this.logger.info(`${this.logPrefix} CLI response: ${result?.substring(0, 500)}`);
-                        const match = result.match(constants_1.CLI_VALIDATE_PATTERN);
-                        this.logger.info(`${this.logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
-                        const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
-                        this.logger.info(`${this.logPrefix} Final result: isValid=${isValid}, errors=${errors}`);
-                        if (isOffline) {
-                            sftp.unlink(remoteFilePath, (err) => {
-                                if (err) {
-                                    reject(err);
-                                }
-                                else {
-                                    resolve({ isValid, errors });
-                                }
-                            });
-                        }
-                        else {
-                            resolve({ isValid, errors });
-                        }
-                    });
-                });
+        const sftp = await this.getSftp();
+        const powerOnName = path_1.default.basename(localFilePath);
+        const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
+        const remoteFilePath = `/SYM/SYM${(0, helpers_1.paddedSymNumber)(this.config.symNumber)}/REPWRITERSPECS/${fileName}`;
+        this.logger.info(`${this.logPrefix} Validating PowerOn: ${powerOnName}`);
+        if (isOffline) {
+            this.logger.info(`${this.logPrefix} Uploading mock PowerOn (${fileName}) in Sym ${this.config.symNumber} for validation`);
+        }
+        else {
+            this.logger.info(`${this.logPrefix} Uploading PowerOn (${fileName}) to Sym ${this.config.symNumber}`);
+        }
+        const data = await fs.promises.readFile(localFilePath, 'utf8');
+        const lfData = data.replace(/\r\n/g, '\n');
+        await new Promise((resolve, reject) => {
+            sftp.writeFile(remoteFilePath, Buffer.from(lfData, 'utf8'), (err) => {
+                if (err)
+                    reject(err);
+                else
+                    resolve();
             });
         });
+        this.setState('executing');
+        this.send([`${fileName}\r`]);
+        this.logger.info(`${this.logPrefix} Waiting for validation response...`);
+        let lastReceivedData = '';
+        const result = await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.tap)((d) => {
+            lastReceivedData = d;
+            if (d.includes(types_1.SymitarCLIValidatePrompts.FILE_DOES_NOT_EXIST)) {
+                this.send([constants_1.ESC, '7\r']);
+            }
+            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_SUCH_FILE_OR_DIRECTORY)) {
+                this.send([constants_1.ESC]);
+            }
+        }), (0, rxjs_1.filter)((d) => [
+            types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND,
+            types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE,
+        ].some((t) => d.includes(t))), (0, rxjs_1.tap)((d) => {
+            if (d.includes(types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE)) {
+                this.send(['n\r', '7\r']);
+            }
+            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND)) {
+                this.send(['\r', '7\r']);
+            }
+        }), (0, rxjs_1.timeout)({
+            each: 60000,
+            with: () => {
+                const lastData = lastReceivedData
+                    ? lastReceivedData.substring(0, 200)
+                    : '(no data received)';
+                throw new Error(`${this.logPrefix} Validation timed out after 60s for ${powerOnName} ` +
+                    `(remote: ${remoteFilePath}). Last received data: ${lastData}`);
+            },
+        }), (0, rxjs_1.take)(1)));
+        this.logger.info(`${this.logPrefix} CLI response: ${result?.substring(0, 500)}`);
+        const match = result.match(constants_1.CLI_VALIDATE_PATTERN);
+        this.logger.info(`${this.logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
+        const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
+        this.logger.info(`${this.logPrefix} Final result: isValid=${isValid}, errors=${errors}`);
+        if (isOffline) {
+            await new Promise((resolve, reject) => {
+                sftp.unlink(remoteFilePath, (err) => {
+                    if (err)
+                        reject(err);
+                    else
+                        resolve();
+                });
+            });
+        }
+        return { isValid, errors };
     }
 }
 exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
@@ -6226,7 +6241,7 @@ exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
 
 /***/ }),
 
-/***/ 2539:
+/***/ 69451:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -6234,10 +6249,10 @@ exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHWorker = void 0;
 const rxjs_1 = __nccwpck_require__(17828);
-const constants_1 = __nccwpck_require__(78488);
-const types_1 = __nccwpck_require__(50336);
-const errors_1 = __nccwpck_require__(55590);
-const logging_1 = __nccwpck_require__(61984);
+const constants_1 = __nccwpck_require__(44088);
+const types_1 = __nccwpck_require__(95328);
+const errors_1 = __nccwpck_require__(50790);
+const logging_1 = __nccwpck_require__(36640);
 class SymitarSSHWorker {
     client;
     channel;
@@ -6472,7 +6487,7 @@ exports.SymitarSSHWorker = SymitarSSHWorker;
 
 /***/ }),
 
-/***/ 43965:
+/***/ 99709:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -6485,9 +6500,9 @@ exports.SymitarWS = exports.SymitarWSWorkArea = exports.SymitarWSState = exports
 const os_1 = __importDefault(__nccwpck_require__(70857));
 const ws_1 = __importDefault(__nccwpck_require__(33449));
 const winston_1 = __importDefault(__nccwpck_require__(68360));
-const helpers_1 = __nccwpck_require__(59884);
-const constants_1 = __nccwpck_require__(78488);
-const logging_1 = __nccwpck_require__(61984);
+const helpers_1 = __nccwpck_require__(53708);
+const constants_1 = __nccwpck_require__(44088);
+const logging_1 = __nccwpck_require__(36640);
 const rxjs_1 = __nccwpck_require__(17828);
 exports.SymitarWSPatterns = {
     SYM_LOGIN_PROMPT: /login as:/,
@@ -6703,7 +6718,7 @@ exports.SymitarWS = SymitarWS;
 
 /***/ }),
 
-/***/ 48135:
+/***/ 14535:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -6724,10 +6739,10 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarWorkerType = exports.SymitarSyncMode = exports.SymitarSyncDirectory = exports.SymitarDirectory = exports.SymitarAppServerFileType = exports.BatchQueueSelection = void 0;
-__exportStar(__nccwpck_require__(53723), exports);
-__exportStar(__nccwpck_require__(18855), exports);
-__exportStar(__nccwpck_require__(43965), exports);
-var types_1 = __nccwpck_require__(50336);
+__exportStar(__nccwpck_require__(99643), exports);
+__exportStar(__nccwpck_require__(52583), exports);
+__exportStar(__nccwpck_require__(99709), exports);
+var types_1 = __nccwpck_require__(95328);
 Object.defineProperty(exports, "BatchQueueSelection", ({ enumerable: true, get: function () { return types_1.BatchQueueSelection; } }));
 Object.defineProperty(exports, "SymitarAppServerFileType", ({ enumerable: true, get: function () { return types_1.SymitarAppServerFileType; } }));
 Object.defineProperty(exports, "SymitarDirectory", ({ enumerable: true, get: function () { return types_1.SymitarDirectory; } }));
@@ -6738,14 +6753,14 @@ Object.defineProperty(exports, "SymitarWorkerType", ({ enumerable: true, get: fu
 
 /***/ }),
 
-/***/ 78488:
+/***/ 44088:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MESSAGE_BLOCK = exports.CLI_VALIDATE_PATTERN = exports.CLI_SSH_WORKER_COMMANDS = exports.CLI_NON_ASCI_PATTERN = exports.CLI_EASE_PATTERN = exports.CLI_CONSOLE_PATTERN = exports.APP_SERVER_VALIDATE_PATTERN = exports.ESC = exports.SSHPASS_PATTERN = void 0;
-const types_1 = __nccwpck_require__(50336);
+const types_1 = __nccwpck_require__(95328);
 exports.SSHPASS_PATTERN = /sshpass -p ".*?"/;
 exports.ESC = '\u001b';
 exports.APP_SERVER_VALIDATE_PATTERN = /(Error in file)(\n|.)*?(Error: Specfile:)/gim;
@@ -6766,7 +6781,7 @@ exports.MESSAGE_BLOCK = /@begin~(.*?)~@end/;
 
 /***/ }),
 
-/***/ 55590:
+/***/ 50790:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -6785,7 +6800,7 @@ exports.ERROR_MESSAGES = {
 
 /***/ }),
 
-/***/ 59884:
+/***/ 53708:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -6829,9 +6844,9 @@ const fs = __importStar(__nccwpck_require__(79896));
 const crypto = __importStar(__nccwpck_require__(76982));
 const child_process_1 = __nccwpck_require__(35317);
 const util_1 = __nccwpck_require__(39023);
-const constants_1 = __nccwpck_require__(78488);
-const types_1 = __nccwpck_require__(50336);
-const scripts_1 = __nccwpck_require__(43017);
+const constants_1 = __nccwpck_require__(44088);
+const types_1 = __nccwpck_require__(95328);
+const scripts_1 = __nccwpck_require__(84265);
 const execPromise = (0, util_1.promisify)(child_process_1.exec);
 const runBashScript = async (script, args = []) => {
     const isWindows = process.platform === 'win32';
@@ -7066,7 +7081,7 @@ exports.paddedSymNumber = paddedSymNumber;
 
 /***/ }),
 
-/***/ 61984:
+/***/ 36640:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -7137,7 +7152,7 @@ function createLogger(logLevel, customLogger) {
 
 /***/ }),
 
-/***/ 43017:
+/***/ 84265:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -7339,7 +7354,7 @@ exit 1
 
 /***/ }),
 
-/***/ 50336:
+/***/ 95328:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -85754,7 +85769,7 @@ exports.validatePowerOns = validatePowerOns;
 const core = __importStar(__nccwpck_require__(16966));
 const exec = __importStar(__nccwpck_require__(92851));
 const path = __importStar(__nccwpck_require__(16928));
-const symitar_1 = __nccwpck_require__(48135);
+const symitar_1 = __nccwpck_require__(14535);
 const subscription_1 = __nccwpck_require__(14565);
 async function getChangedFiles(targetBranch, poweronDirectory, ignoreList) {
     // Ensure we're running in the workspace directory
@@ -85904,6 +85919,7 @@ async function validateWithSSH(config, files) {
         const errors = [];
         const validatedFiles = [];
         let filesFailed = 0;
+        // Process files sequentially - worker maintains state and resets after each validation
         for (const file of files) {
             const fileName = path.basename(file.filePath);
             validatedFiles.push(fileName);
@@ -85915,11 +85931,13 @@ async function validateWithSSH(config, files) {
                     const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
                     errors.push(`${fileName}: ${errorMsg}`);
                 }
+                core.info(`${config.logPrefix} ✓ ${fileName} validated`);
             }
             catch (error) {
                 filesFailed++;
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 errors.push(`${fileName}: ${errorMsg}`);
+                core.info(`${config.logPrefix} ✗ ${fileName} failed`);
             }
         }
         return {
@@ -93166,7 +93184,7 @@ module.exports = {"version":"3.18.3"};
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.1.1","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && rm -f dist/*.d.ts dist/*.d.ts.map dist/pagent.exe && rm -rf dist/build dist/lib","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \'src/**/*.ts\' \'__tests__/**/*.ts\'","lint:fix":"eslint --cache --quiet --fix && prettier --write \'src/**/*.ts\' \'__tests__/**/*.ts\'","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"^0.6.5"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.1.1","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && rm -f dist/*.d.ts dist/*.d.ts.map dist/pagent.exe && rm -rf dist/build dist/lib","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \'src/**/*.ts\' \'__tests__/**/*.ts\'","lint:fix":"eslint --cache --quiet --fix && prettier --write \'src/**/*.ts\' \'__tests__/**/*.ts\'","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"^0.7.0"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
 
 /***/ })
 
