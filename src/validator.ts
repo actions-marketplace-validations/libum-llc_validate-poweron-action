@@ -1,7 +1,13 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as path from 'path';
-import { SymitarHTTPs, SymitarSSH } from '@libum-llc/symitar';
+import {
+  SymitarHTTPs,
+  SymitarSSH,
+  isPowerOnFile,
+  shouldValidatePowerOnFile,
+  POWERON_EXTENSIONS,
+} from '@libum-llc/symitar';
 import { validateApiKey } from './subscription';
 
 export interface ValidationConfig {
@@ -45,9 +51,17 @@ async function getChangedFiles(
   const execOptions = workspace ? { cwd: workspace } : {};
 
   if (!targetBranch) {
-    // If no target branch, validate all files in directory
+    // If no target branch, validate all PowerOn files in directory
+    // Build find command with all PowerOn extensions
+    const findArgs = [poweronDirectory, '-type', 'f', '('];
+    POWERON_EXTENSIONS.forEach((ext, index) => {
+      if (index > 0) findArgs.push('-o');
+      findArgs.push('-iname', `*${ext}`);
+    });
+    findArgs.push(')');
+
     let output = '';
-    await exec.exec('find', [poweronDirectory, '-type', 'f', '-name', '*.PO'], {
+    await exec.exec('find', findArgs, {
       ...execOptions,
       silent: true,
       listeners: {
@@ -57,11 +71,23 @@ async function getChangedFiles(
       },
     });
 
-    return output
+    const allFiles = output
       .split('\n')
       .filter((f) => f.trim().length > 0)
-      .filter((f) => !ignoreList.includes(path.basename(f)))
-      .map((f) => ({ filePath: f, status: 'existing' }));
+      .filter((f) => !ignoreList.includes(path.basename(f)));
+
+    // Filter to only files that should be validated
+    const filesToValidate: ChangedFile[] = [];
+    for (const filePath of allFiles) {
+      const fullPath = path.isAbsolute(filePath)
+        ? filePath
+        : path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+      if (await shouldValidatePowerOnFile(fullPath)) {
+        filesToValidate.push({ filePath, status: 'existing' });
+      }
+    }
+
+    return filesToValidate;
   }
 
   // Verify the target branch exists - try multiple formats
@@ -119,8 +145,17 @@ async function getChangedFiles(
       const filePath = parts[1];
       const basename = path.basename(filePath);
 
-      // Skip deleted files and ignored files
-      if (status !== 'D' && !ignoreList.includes(basename)) {
+      // Skip deleted files, ignored files, and non-PowerOn files
+      if (status === 'D' || ignoreList.includes(basename) || !isPowerOnFile(filePath)) {
+        continue;
+      }
+
+      // Check if this PowerOn file should be validated (skip .PRO, .DEF, etc.)
+      const fullPath = path.isAbsolute(filePath)
+        ? filePath
+        : path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+
+      if (await shouldValidatePowerOnFile(fullPath)) {
         changedFiles.push({
           filePath,
           status: status === 'A' ? 'added' : status === 'M' ? 'modified' : status,
