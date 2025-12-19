@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
+import * as fs from 'fs';
 import { validatePowerOns } from '../src/validator';
 import type { ValidationConfig } from '../src/validator';
 import { SymitarHTTPs, SymitarSSH } from '@libum-llc/symitar';
@@ -7,12 +8,49 @@ import * as subscription from '../src/subscription';
 
 jest.mock('@actions/core');
 jest.mock('@actions/exec');
-jest.mock('@libum-llc/symitar');
+jest.mock('fs', () => ({
+  ...jest.requireActual('fs'),
+  promises: {
+    readFile: jest.fn(),
+  },
+}));
+jest.mock('@libum-llc/symitar', () => ({
+  ...jest.requireActual('@libum-llc/symitar'),
+  SymitarHTTPs: jest.fn(),
+  SymitarSSH: jest.fn(),
+}));
 jest.mock('../src/subscription');
+
+// Valid PowerOn specfile content for testing
+const VALID_SPECFILE = `TARGET=ACCOUNT
+
+DEFINE
+  @MYVAR=NUMBER
+END
+
+PRINT TITLE="My Report"
+  ACCOUNT:NUMBER
+END
+`;
 
 describe('validator', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Mock fs.promises.readFile to return valid specfile content by default
+    (fs.promises.readFile as jest.Mock).mockResolvedValue(VALID_SPECFILE);
+
+    // Default SSH client mock for all tests
+    const mockWorker = {
+      validatePowerOn: jest.fn().mockResolvedValue({ isValid: true, errors: [] }),
+    };
+    const mockSSHClient = {
+      isReady: Promise.resolve(),
+      createValidateWorker: jest.fn().mockResolvedValue(mockWorker),
+      end: jest.fn().mockResolvedValue(undefined),
+    };
+    (SymitarSSH as jest.MockedClass<typeof SymitarSSH>).mockImplementation(
+      () => mockSSHClient as any,
+    );
   });
 
   beforeAll(() => {
@@ -36,7 +74,7 @@ describe('validator', () => {
   };
 
   describe('getChangedFiles - no target branch', () => {
-    it('should find all .PO files in directory when no target branch specified', async () => {
+    it('should find all PowerOn files in directory when no target branch specified', async () => {
       const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
       mockExec.mockImplementation(async (cmd, args, options) => {
         if (cmd === 'find' && options?.listeners?.stdout) {
@@ -48,9 +86,10 @@ describe('validator', () => {
 
       const result = await validatePowerOns(baseConfig);
 
+      // Should use find with all PowerOn extensions
       expect(mockExec).toHaveBeenCalledWith(
         'find',
-        ['REPWRITERSPECS/', '-type', 'f', '-name', '*.PO'],
+        expect.arrayContaining(['REPWRITERSPECS/', '-type', 'f', '(', '-iname', '*.PO']),
         expect.any(Object),
       );
       expect(result.filesValidated).toBe(2);
@@ -69,6 +108,67 @@ describe('validator', () => {
       const config = { ...baseConfig, ignoreList: ['IGNORE.PO'] };
       const result = await validatePowerOns(config);
 
+      expect(result.filesValidated).toBe(1);
+    });
+
+    it('should skip .DEF, .PRO, .SET, .FMP, and .SUB files from validation', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockImplementation(async (cmd, args, options) => {
+        if (cmd === 'find' && options?.listeners?.stdout) {
+          // Find returns various PowerOn file types
+          const files =
+            'REPWRITERSPECS/FILE1.PO\nREPWRITERSPECS/UTILS.DEF\nREPWRITERSPECS/HELPER.PRO\nREPWRITERSPECS/CONFIG.SET\nREPWRITERSPECS/FORM.FMP\nREPWRITERSPECS/COMMON.SUB\n';
+          options.listeners.stdout(Buffer.from(files));
+        }
+        return 0;
+      });
+
+      // Extension-based skipping happens before file read, so only FILE1.PO will be read
+      const result = await validatePowerOns(baseConfig);
+
+      // Only .PO files should be validated (DEF, PRO, SET, FMP, SUB are skipped by extension)
+      expect(result.filesValidated).toBe(1);
+    });
+
+    it('should skip files starting with PROCEDURE keyword', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockImplementation(async (cmd, args, options) => {
+        if (cmd === 'find' && options?.listeners?.stdout) {
+          const files = 'REPWRITERSPECS/MAIN.PO\nREPWRITERSPECS/PROC.PO\n';
+          options.listeners.stdout(Buffer.from(files));
+        }
+        return 0;
+      });
+
+      // First file is valid specfile, second starts with PROCEDURE
+      (fs.promises.readFile as jest.Mock)
+        .mockResolvedValueOnce(VALID_SPECFILE)
+        .mockResolvedValueOnce('PROCEDURE MYPROC\n  [ procedure content ]\nEND');
+
+      const result = await validatePowerOns(baseConfig);
+
+      // Only MAIN.PO should be validated, PROC.PO is skipped
+      expect(result.filesValidated).toBe(1);
+    });
+
+    it('should skip files missing required TARGET or PRINT TITLE divisions', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockImplementation(async (cmd, args, options) => {
+        if (cmd === 'find' && options?.listeners?.stdout) {
+          const files = 'REPWRITERSPECS/VALID.PO\nREPWRITERSPECS/INCOMPLETE.PO\n';
+          options.listeners.stdout(Buffer.from(files));
+        }
+        return 0;
+      });
+
+      // First file is valid, second is missing PRINT TITLE
+      (fs.promises.readFile as jest.Mock)
+        .mockResolvedValueOnce(VALID_SPECFILE)
+        .mockResolvedValueOnce('TARGET=ACCOUNT\nDEFINE\n  @VAR=NUMBER\nEND');
+
+      const result = await validatePowerOns(baseConfig);
+
+      // Only VALID.PO should be validated
       expect(result.filesValidated).toBe(1);
     });
   });
@@ -126,6 +226,45 @@ describe('validator', () => {
 
       expect(result.filesValidated).toBe(1);
     });
+
+    it('should skip .DEF, .PRO, .SET, and .FMP files from validation with target branch', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockImplementation(async (cmd, args, options) => {
+        if (cmd === 'git' && options?.listeners?.stdout) {
+          // Git diff returns various PowerOn file types
+          const gitOutput =
+            'M\tREPWRITERSPECS/FILE1.PO\nA\tREPWRITERSPECS/UTILS.DEF\nM\tREPWRITERSPECS/HELPER.PRO\n';
+          options.listeners.stdout(Buffer.from(gitOutput));
+        }
+        return 0;
+      });
+
+      // Extension-based skipping happens before file read, so only FILE1.PO will be read
+      const config = { ...baseConfig, targetBranch: 'origin/main' };
+      const result = await validatePowerOns(config);
+
+      // Only .PO files should be validated (DEF, PRO are skipped by extension)
+      expect(result.filesValidated).toBe(1);
+    });
+
+    it('should skip non-PowerOn files from git diff', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockImplementation(async (cmd, args, options) => {
+        if (cmd === 'git' && options?.listeners?.stdout) {
+          // Git diff might return non-PowerOn files too
+          const gitOutput =
+            'M\tREPWRITERSPECS/FILE1.PO\nA\tREPWRITERSPECS/README.md\nM\tREPWRITERSPECS/config.json\n';
+          options.listeners.stdout(Buffer.from(gitOutput));
+        }
+        return 0;
+      });
+
+      const config = { ...baseConfig, targetBranch: 'origin/main' };
+      const result = await validatePowerOns(config);
+
+      // Only .PO files should be validated
+      expect(result.filesValidated).toBe(1);
+    });
   });
 
   describe('validateWithSSH', () => {
@@ -154,17 +293,19 @@ describe('validator', () => {
 
       const result = await validatePowerOns(baseConfig);
 
-      expect(SymitarSSH).toHaveBeenCalledWith({
-        host: 'test.symitar.example.com',
-        port: 22,
-        username: 'sshuser',
-        password: 'sshpass',
-      });
+      expect(SymitarSSH).toHaveBeenCalledWith(
+        {
+          host: 'test.symitar.example.com',
+          port: 22,
+          username: 'sshuser',
+          password: 'sshpass',
+        },
+        'warn',
+      );
       expect(mockSSHClient.createValidateWorker).toHaveBeenCalledWith({
         symNumber: 1,
         symitarUserNumber: '1234',
         symitarUserPassword: 'password',
-        apiKey: 'test-api-key',
       });
       expect(mockWorker.validatePowerOn).toHaveBeenCalledWith('REPWRITERSPECS/TEST.PO');
       expect(mockSSHClient.end).toHaveBeenCalled();
@@ -233,11 +374,9 @@ describe('validator', () => {
           symNumber: 1,
           symitarUserNumber: '1234',
           symitarUserPassword: 'password',
-          apiKey: 'test-api-key',
         },
         'info',
         {
-          host: 'test.symitar.example.com',
           port: 22,
           username: 'sshuser',
           password: 'sshpass',
@@ -341,7 +480,10 @@ describe('validator', () => {
 
       await validatePowerOns(baseConfig);
 
-      expect(subscription.validateApiKey).toHaveBeenCalledWith('test-api-key');
+      expect(subscription.validateApiKey).toHaveBeenCalledWith(
+        'test-api-key',
+        'test.symitar.example.com',
+      );
     });
 
     // Note: These tests verify error handling behavior when API validation fails

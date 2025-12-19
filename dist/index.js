@@ -4374,7 +4374,335 @@ module.exports = diagnostics;
 
 /***/ }),
 
-/***/ 25812:
+/***/ 18348:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getChangedFiles = void 0;
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
+const getChangedFiles = async (host, config, sshConfig, localDirectory, remoteDirectory, logger, logPrefix, syncMode = types_1.SymitarSyncMode.MIRROR) => {
+    try {
+        const changedFiles = await (0, helpers_1.executeRsync)({
+            host: host,
+            username: sshConfig.username,
+            password: sshConfig.password,
+            symNumber: config.symNumber,
+            localDirectory,
+            remoteDirectory,
+            syncMode,
+        }, true);
+        return changedFiles;
+    }
+    catch (error) {
+        logger.error(`${logPrefix} Unable to get changed files: ${error.message}`);
+        throw error;
+    }
+};
+exports.getChangedFiles = getChangedFiles;
+//# sourceMappingURL=https.changes.js.map
+
+/***/ }),
+
+/***/ 80682:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.deployFile = void 0;
+const path_1 = __importDefault(__nccwpck_require__(16928));
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
+const appServerToFileType = {
+    [types_1.SymitarAppServerFileType.POWERON]: types_1.SymitarFileType.POWERON,
+    [types_1.SymitarAppServerFileType.DATAFILE]: types_1.SymitarFileType.DATAFILE,
+    [types_1.SymitarAppServerFileType.HELPFILE]: types_1.SymitarFileType.HELPFILE,
+    [types_1.SymitarAppServerFileType.LETTERFILE]: types_1.SymitarFileType.LETTERFILE,
+};
+const deployFile = async (client, sshClient, config, type, localFilePath, remoteFileName, logger, logPrefix) => {
+    if (type !== types_1.SymitarAppServerFileType.POWERON) {
+        if (!sshClient) {
+            throw new Error(`Unable to deploy ${type} file without SSH client. SSH configuration is required for DATAFILE, HELPFILE, and LETTERFILE types.`);
+        }
+        await sshClient.isReady;
+        const fileType = appServerToFileType[type];
+        const fileName = remoteFileName || path_1.default.basename(localFilePath);
+        logger?.info(`${logPrefix} Deploying ${fileName} to ${fileType}/ in Sym ${config.symNumber} via SSH...`);
+        const transferWorker = await sshClient.createTransferWorker(config);
+        await transferWorker.deployFile(fileType, localFilePath, remoteFileName);
+        return true;
+    }
+    const body = await (0, helpers_1.convertFileToBinary)(localFilePath);
+    const fileName = remoteFileName || path_1.default.basename(localFilePath);
+    logger?.info(`${logPrefix} Deploying ${fileName} via SymAppServer...`);
+    const response = await client.post('/root/invoke', body, {
+        headers: {
+            'Content-Length': body.length.toString(),
+            action: types_1.SymitarAppServerAction.FILE_DEPLOY,
+            poweronName: fileName,
+            type,
+            install: 'false',
+        },
+    });
+    logger?.info(`${logPrefix} Deploy response status: ${response?.status}`);
+    if (!response || response.status !== 200 || !response.data) {
+        throw new Error('Unable to deploy file to Symitar');
+    }
+    return true;
+};
+exports.deployFile = deployFile;
+//# sourceMappingURL=https.deploy.js.map
+
+/***/ }),
+
+/***/ 56365:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.downloadFile = void 0;
+const path_1 = __importDefault(__nccwpck_require__(16928));
+const fs_1 = __importDefault(__nccwpck_require__(79896));
+const os_1 = __importDefault(__nccwpck_require__(70857));
+const types_1 = __nccwpck_require__(91756);
+const appServerToFileType = {
+    [types_1.SymitarAppServerFileType.POWERON]: types_1.SymitarFileType.POWERON,
+    [types_1.SymitarAppServerFileType.DATAFILE]: types_1.SymitarFileType.DATAFILE,
+    [types_1.SymitarAppServerFileType.HELPFILE]: types_1.SymitarFileType.HELPFILE,
+    [types_1.SymitarAppServerFileType.LETTERFILE]: types_1.SymitarFileType.LETTERFILE,
+};
+const downloadFile = async (client, sshClient, config, type, localFilePath, logger, logPrefix) => {
+    if (type !== types_1.SymitarAppServerFileType.POWERON) {
+        if (!sshClient) {
+            throw new Error(`Unable to download ${type} file without SSH client. SSH configuration is required for DATAFILE, HELPFILE, and LETTERFILE types.`);
+        }
+        await sshClient.isReady;
+        const fileType = appServerToFileType[type];
+        const fileName = path_1.default.basename(localFilePath);
+        logger?.info(`${logPrefix} Downloading ${fileName} from ${fileType}/ in Sym ${config.symNumber} via SSH...`);
+        const tempDir = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'symitar-'));
+        const tempFilePath = path_1.default.join(tempDir, fileName);
+        try {
+            const transferWorker = await sshClient.createTransferWorker(config);
+            await transferWorker.downloadFile(fileType, fileName, tempDir);
+            const content = fs_1.default.readFileSync(tempFilePath, 'utf8');
+            return content;
+        }
+        finally {
+            if (fs_1.default.existsSync(tempFilePath)) {
+                fs_1.default.unlinkSync(tempFilePath);
+            }
+            if (fs_1.default.existsSync(tempDir)) {
+                fs_1.default.rmdirSync(tempDir);
+            }
+        }
+    }
+    const response = await client.post('/root/invoke', null, {
+        headers: {
+            action: types_1.SymitarAppServerAction.FILE_DOWNLOAD,
+            poweronName: path_1.default.basename(localFilePath),
+            type,
+        },
+    });
+    if (!response || response.status !== 200 || !response.data) {
+        throw new Error('Unable to download file from Symitar');
+    }
+    if (typeof response.data !== 'string') {
+        const errorMessage = response.data?.message || response.data?.error || 'Unknown error';
+        throw new Error(`Unable to download file from Symitar: ${errorMessage}. The file may not exist.`);
+    }
+    return response.data;
+};
+exports.downloadFile = downloadFile;
+//# sourceMappingURL=https.download.js.map
+
+/***/ }),
+
+/***/ 78410:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.executePowerOn = executePowerOn;
+const types_1 = __nccwpck_require__(91756);
+async function executePowerOn(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, options) {
+    return executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, undefined, undefined, options);
+}
+async function executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, transactionId, input, options) {
+    const payload = {
+        TaskManager_PowerOnInteractiveExecute: {
+            sym: symNumber,
+            user: symitarUserNumber,
+            password: symitarUserPassword,
+            jobName: 'REPWRITER',
+            specfile: powerOnName,
+        },
+    };
+    if (transactionId) {
+        payload.TaskManager_PowerOnInteractiveExecute.transactionId = transactionId;
+    }
+    if (input !== undefined) {
+        payload.TaskManager_PowerOnInteractiveExecute.input = input;
+    }
+    try {
+        const response = await client.post('/root/invoke', JSON.stringify(payload), {
+            headers: {
+                action: types_1.SymitarAppServerAction.POWERON_EXECUTE,
+            },
+        });
+        const result = response.data?.TaskManager_PowerOnInteractiveExecute;
+        if (!result) {
+            return {
+                success: false,
+                report: {},
+                error: 'Invalid response from server',
+            };
+        }
+        if (result.status !== 'success' ||
+            result.output?.includes('Error: Job Failed')) {
+            const matches = result.output
+                ? [...result.output.matchAll(/"(\d+)"\s*,\s*"([^"]+)"/g)]
+                : [];
+            const report = Object.fromEntries(matches.map(([, num, text]) => [num, text]));
+            return {
+                success: false,
+                report,
+                error: result.message || 'Job failed',
+            };
+        }
+        if (/in progress/i.test(result.message)) {
+            const output = result.output?.split('\n') || [];
+            const promptLines = [];
+            for (let i = 1; i < output.length - 1; i++) {
+                promptLines.push(output[i]);
+            }
+            if (promptLines.length > 0 && result.transactionId) {
+                const promptText = output[output.length - 2]?.trim() || '';
+                const errorPatterns = [
+                    /specification file cannot be found/i,
+                    /error:/i,
+                    /failed/i,
+                ];
+                const isErrorPrompt = errorPatterns.some((pattern) => pattern.test(promptText));
+                if (isErrorPrompt) {
+                    return {
+                        success: false,
+                        report: {},
+                        error: promptText,
+                    };
+                }
+                const prompt = {
+                    text: promptText,
+                    context: promptLines,
+                    transactionId: result.transactionId,
+                };
+                if (!options?.promptHandler) {
+                    return {
+                        success: false,
+                        report: {},
+                        error: `PowerOn requires input but no prompt handler provided. Prompt: ${promptText}`,
+                    };
+                }
+                const userInput = await options.promptHandler(prompt);
+                if (userInput === undefined) {
+                    return {
+                        success: false,
+                        report: {},
+                        error: 'Execution cancelled by user',
+                    };
+                }
+                return executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, result.transactionId, userInput, options);
+            }
+            else if (result.transactionId) {
+                await sleep(1000);
+                return executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, result.transactionId, undefined, options);
+            }
+            else {
+                return {
+                    success: false,
+                    report: {},
+                    error: 'PowerOn in progress but missing transaction ID',
+                };
+            }
+        }
+        if (/success/i.test(result.message)) {
+            return {
+                success: true,
+                report: result.report || {},
+            };
+        }
+        return {
+            success: false,
+            report: {},
+            error: `Unknown response: ${result.message}`,
+        };
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error occurred';
+        return {
+            success: false,
+            report: {},
+            error: `Failed to execute ${powerOnName}: ${message}`,
+        };
+    }
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+//# sourceMappingURL=https.execute.js.map
+
+/***/ }),
+
+/***/ 8802:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.installPowerOn = void 0;
+const path_1 = __importDefault(__nccwpck_require__(16928));
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
+const installPowerOn = async (client, localFilePath, logger, logPrefix) => {
+    const body = await (0, helpers_1.convertFileToBinary)(localFilePath);
+    const fileName = path_1.default.basename(localFilePath);
+    logger?.info(`${logPrefix} Installing ${fileName} via SymAppServer...`);
+    const response = await client.post('/root/invoke', body, {
+        headers: {
+            'Content-Length': body.length.toString(),
+            action: types_1.SymitarAppServerAction.POWERON_INSTALL,
+            poweronName: fileName,
+            type: types_1.SymitarAppServerFileType.POWERON,
+            install: 'true',
+            validate: 'true',
+        },
+    });
+    logger?.info(`${logPrefix} Install response status: ${response?.status}`);
+    if (!response || response.status !== 200 || !response.data) {
+        throw new Error('Unable to install PowerOn from Symitar');
+    }
+    return true;
+};
+exports.installPowerOn = installPowerOn;
+//# sourceMappingURL=https.install.js.map
+
+/***/ }),
+
+/***/ 63591:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4384,15 +4712,25 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarHTTPs = void 0;
-const path_1 = __importDefault(__nccwpck_require__(16928));
 const https_1 = __importDefault(__nccwpck_require__(65692));
-const winston_1 = __importDefault(__nccwpck_require__(68360));
 const axios_1 = __importDefault(__nccwpck_require__(27455));
-const helpers_1 = __nccwpck_require__(92445);
-const ssh_1 = __nccwpck_require__(45728);
-const types_1 = __nccwpck_require__(24709);
-const constants_1 = __nccwpck_require__(82133);
+const helpers_1 = __nccwpck_require__(68400);
+const logging_1 = __nccwpck_require__(58924);
+const ssh_1 = __nccwpck_require__(14339);
+const types_1 = __nccwpck_require__(91756);
+const https_deploy_1 = __nccwpck_require__(80682);
+const https_download_1 = __nccwpck_require__(56365);
+const https_install_1 = __nccwpck_require__(8802);
+const https_list_1 = __nccwpck_require__(34793);
+const https_remove_1 = __nccwpck_require__(66393);
+const https_synchronize_1 = __nccwpck_require__(12191);
+const https_validate_1 = __nccwpck_require__(6139);
+const https_uninstall_1 = __nccwpck_require__(81123);
+const https_changes_1 = __nccwpck_require__(18348);
+const https_execute_1 = __nccwpck_require__(78410);
+const https_reports_1 = __nccwpck_require__(71018);
 https_1.default.globalAgent.options.rejectUnauthorized = false;
+const DEFAULT_REQUEST_TIMEOUT = 60000;
 class SymitarHTTPs {
     _client;
     _sshClient = null;
@@ -4401,16 +4739,14 @@ class SymitarHTTPs {
     host;
     config;
     sshConfig;
-    constructor(baseUrl, config, logLevel = 'info', sshConfig) {
+    constructor(baseUrl, config, logLevel = 'info', sshConfig, options, customLogger) {
         this.config = config;
+        this.sshConfig = sshConfig;
         this.host = new URL(baseUrl).hostname;
-        this._logger = winston_1.default.createLogger({
-            level: logLevel,
-            format: winston_1.default.format.combine(winston_1.default.format.colorize(), winston_1.default.format.printf(({ message }) => `${message}`)),
-            transports: [new winston_1.default.transports.Console()],
-        });
+        this._logger = (0, logging_1.createLogger)(logLevel, customLogger);
         this._client = axios_1.default.create({
             baseURL: baseUrl,
+            timeout: options?.timeout ?? DEFAULT_REQUEST_TIMEOUT,
             headers: {
                 Accept: '*/*',
                 service: types_1.SymitarAppServerService.TASK_MANAGER,
@@ -4423,295 +4759,68 @@ class SymitarHTTPs {
             this._sshClient = new ssh_1.SymitarSSH({
                 host: this.host,
                 ...sshConfig,
-            });
+            }, logLevel, customLogger);
         }
     }
-    end() {
-        this._sshClient.end();
-        this._client = null;
+    async end() {
+        if (this._sshClient) {
+            await this._sshClient.end();
+        }
     }
-    async getChangedPowerOns(localPowerOnDirectory) {
-        const logPrefix = `[GetChangedPowerOns]`;
-        return new Promise(async (resolve, reject) => {
-            try {
-                const changedPowerOns = await (0, helpers_1.executePowerOnRsync)({
-                    host: this.host,
-                    username: this.sshConfig.username,
-                    password: this.sshConfig.password,
-                    symNumber: this.config.symNumber,
-                    directory: localPowerOnDirectory,
-                }, true);
-                resolve(changedPowerOns);
-            }
-            catch (error) {
-                this._logger.error(`${logPrefix} Unable to get changed PowerOn files: ${error.message}`);
-                reject(error);
-            }
-        });
+    async getChangedFiles(localDirectory, remoteDirectory = types_1.SymitarSyncDirectory.REPWRITERSPECS, syncMode = types_1.SymitarSyncMode.MIRROR) {
+        if (!this.sshConfig) {
+            throw new Error('SSH configuration required for getChangedFiles');
+        }
+        const logPrefix = `[GetChangedFiles]`;
+        return (0, https_changes_1.getChangedFiles)(this.host, this.config, this.sshConfig, localDirectory, remoteDirectory, this._logger, logPrefix, syncMode);
     }
     async deployFile(type, localFilePath, remoteFileName) {
-        const body = (0, helpers_1.convertFileToBinary)(localFilePath);
-        return new Promise(async (resolve, reject) => {
-            const response = await this._client.post('/root/invoke', body, {
-                headers: {
-                    'Content-Length': body.length.toString(),
-                    action: types_1.SymitarAppServerAction.FILE_DEPLOY,
-                    poweronName: remoteFileName || path_1.default.basename(localFilePath),
-                    type,
-                    install: 'false',
-                },
-            });
-            if (!response || response.status !== 200 || !response.data) {
-                reject('Unable to deploy file to Symitar');
-            }
-            resolve(true);
-        });
+        return (0, https_deploy_1.deployFile)(this._client, this._sshClient, this.config, type, localFilePath, remoteFileName, this._logger, this._logPrefix);
     }
     async downloadFile(type, localFilePath) {
-        return new Promise(async (resolve, reject) => {
-            const response = await this._client.post('/root/invoke', {
-                headers: {
-                    action: types_1.SymitarAppServerAction.FILE_DOWNLOAD,
-                    poweronName: path_1.default.basename(localFilePath),
-                    type,
-                },
-            });
-            if (!response || response.status !== 200 || !response.data) {
-                reject('Unable to download file from Symitar');
-            }
-            resolve(response.data);
-        });
+        return (0, https_download_1.downloadFile)(this._client, this._sshClient, this.config, type, localFilePath, this._logger, this._logPrefix);
     }
     async installPowerOn(localFilePath) {
-        const body = (0, helpers_1.convertFileToBinary)(localFilePath);
-        return new Promise(async (resolve, reject) => {
-            const response = await this._client.post('/root/invoke', body, {
-                headers: {
-                    'Content-Length': body.length.toString(),
-                    action: types_1.SymitarAppServerAction.POWERON_INSTALL,
-                    poweronName: path_1.default.basename(localFilePath),
-                    type: types_1.SymitarAppServerFileType.POWERON,
-                    install: 'true',
-                    validate: 'true',
-                },
-            });
-            if (!response || response.status !== 200 || !response.data) {
-                reject('Unable to install PowerOn from Symitar');
-            }
-            resolve(true);
-        });
+        return (0, https_install_1.installPowerOn)(this._client, localFilePath, this._logger, this._logPrefix);
     }
     async listPowerOns() {
-        const powerOns = [];
-        return new Promise(async (resolve, reject) => {
-            const response = await this._client.post('/root/invoke', {
-                headers: {
-                    action: types_1.SymitarAppServerAction.LIST_POWERON,
-                },
-            });
-            if (!response || response.status !== 200 || !response.data) {
-                reject('Unable to list PowerOns from Symitar');
-            }
-            powerOns.push(...(response.data['TaskManager_PowerOnList']['poweronList'] || []));
-            resolve(powerOns);
-        });
+        return (0, https_list_1.listPowerOns)(this._client);
+    }
+    async listFiles(directory) {
+        return (0, https_list_1.listFiles)(this._client, this._sshClient, this.config, directory, this._logger, this._logPrefix);
     }
     async removeFile(type, fileName) {
-        if (!this._sshClient) {
-            throw new Error('Unable to remove file without SSH client');
-        }
-        await this._sshClient.isReady;
-        this._logger.info(`${this._logPrefix} Removing ${fileName} from ${type}/ in Sym ${this.config.symNumber}...`);
-        return new Promise(async (resolve, reject) => {
-            try {
-                const transferWorker = await this._sshClient.createTransferWorker({
-                    ...this.config,
-                });
-                await transferWorker.removeFile(type, fileName);
-                resolve();
-            }
-            catch (error) {
-                this._logger.error(`${this._logPrefix} Failed to remove ${fileName} from ${type}/ in Sym ${this.config.symNumber}: ${error.message}`);
-                reject(error);
-            }
-        });
+        return (0, https_remove_1.removeFile)(this._sshClient, this.config, type, fileName, this._logger, this._logPrefix);
     }
-    async synchronizePowerOns(localPowerOnDirectory, installPowerOnList, isDryRun = true) {
-        if (!this._sshClient) {
-            throw new Error('Unable to synchronize PowerOns without SSH client');
-        }
-        await this._sshClient.isReady;
-        return new Promise(async (resolve, reject) => {
-            const logPrefix = '[SynchronizePowerOns]';
-            const { deleted, deployed } = await this._sshClient.getChangedPowerOns(this.config, localPowerOnDirectory);
-            if (deleted.length === 0 && deployed.length === 0) {
-                this._logger.info(`${logPrefix} No changes detected in PowerOn files. Nothing to synchronize.`);
-                return resolve({
-                    deleted: [],
-                    deployed: [],
-                    installed: [],
-                    uninstalled: [],
-                });
-            }
-            this._logger.info(`${logPrefix} Validating changed PowerOn files`);
-            const invalidPowerOns = [];
-            const validatePowerOns = deployed.filter((file) => !deleted.includes(file));
-            for (const poweron of validatePowerOns) {
-                try {
-                    const result = await this.validatePowerOn(`${localPowerOnDirectory}/${poweron}`);
-                    if (!result.isValid) {
-                        invalidPowerOns.push({
-                            name: poweron,
-                            errors: result.errors,
-                        });
-                    }
-                }
-                catch (error) {
-                    this._logger.error(`${logPrefix} Validation failed for PowerOn file ${poweron}: ${error.message}`);
-                    reject(error);
-                }
-            }
-            if (invalidPowerOns.length > 0) {
-                const details = invalidPowerOns
-                    .map((po) => `${logPrefix} - ${po.name}\n${logPrefix}\n` +
-                    po.errors
-                        .split('\n')
-                        .map((line) => `${logPrefix}   ${line}`)
-                        .join('\n'))
-                    .join('\n');
-                this._logger.error(`${logPrefix} Invalid PowerOn files detected:\n${details}`);
-                return reject(new Error(`Invalid PowerOn files detected. Please fix the errors before synchronizing.`));
-            }
-            this._logger.info(`${logPrefix} Beginning synchronization of PowerOn files ${isDryRun ? '(Dry Run)' : ''}`);
-            try {
-                !isDryRun &&
-                    (await (0, helpers_1.executePowerOnRsync)({
-                        host: this.host,
-                        ...this.sshConfig,
-                        symNumber: this.config.symNumber,
-                        directory: localPowerOnDirectory,
-                    }, isDryRun));
-                const hasDeployedPowerOnFiles = deployed.length > 0 &&
-                    deployed.some((item) => installPowerOnList.includes(item));
-                const hasDeletedPowerOnFiles = deleted.length > 0 &&
-                    deleted.some((item) => installPowerOnList.includes(item));
-                const installed = [];
-                const uninstalled = [];
-                if (hasDeployedPowerOnFiles) {
-                    const installPowerOnFiles = deployed.filter((item) => installPowerOnList.includes(item));
-                    this._logger.info(`${logPrefix} Found PowerOn files to install: ${installPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
-                    for (const poweron of installPowerOnFiles) {
-                        if (!isDryRun) {
-                            await this.installPowerOn(`${localPowerOnDirectory}${poweron}`);
-                        }
-                        else {
-                            this._logger.info(`${logPrefix} Would install PowerOn: ${poweron} (Dry Run)`);
-                        }
-                    }
-                }
-                if (hasDeletedPowerOnFiles) {
-                    const uninstallPowerOnFiles = deleted.filter((item) => installPowerOnList.includes(item));
-                    this._logger.info(`${logPrefix} Found PowerOn files to uninstall: ${uninstallPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
-                    for (const poweron of uninstallPowerOnFiles) {
-                        if (!isDryRun) {
-                            try {
-                                await this.uninstallPowerOn(poweron);
-                                uninstalled.push(poweron);
-                            }
-                            catch (error) {
-                                if (error.message.includes('No such file')) {
-                                    this._logger.info(`${logPrefix} Skipping uninstall of PowerOn (not currently installed): ${poweron}`);
-                                }
-                                else {
-                                    throw error;
-                                }
-                            }
-                        }
-                        else {
-                            this._logger.info(`${logPrefix} Would uninstall PowerOn: ${poweron} (Dry Run)`);
-                        }
-                    }
-                }
-                this._logger.info(`${logPrefix} Synchronized PowerOn files: ${deployed.length} deployed, ${deleted.length} deleted ${isDryRun ? '(Dry Run)' : ''}`);
-                return resolve({
-                    deleted,
-                    deployed,
-                    installed,
-                    uninstalled,
-                });
-            }
-            catch (error) {
-                this._logger.error(`${this._logPrefix} Unable to synchronize PowerOn files: ${error.message}`);
-                return reject(error);
-            }
-        });
+    async synchronizeFiles(localDirectory, installPowerOnList, isDryRun = true, remoteDirectory = types_1.SymitarSyncDirectory.REPWRITERSPECS, syncMode = types_1.SymitarSyncMode.MIRROR, validateIgnoreList = []) {
+        return (0, https_synchronize_1.synchronizeFiles)(this._client, this._sshClient, this.host, this.config, this.sshConfig, localDirectory, remoteDirectory, installPowerOnList, isDryRun, this._logger, this._logPrefix, syncMode, validateIgnoreList);
     }
     async validatePowerOn(localFilePath, isOffline = true) {
-        if (isOffline && !this._sshClient) {
-            throw new Error('Unable to uninstall PowerOn without SSH client');
-        }
-        await this._sshClient.isReady;
-        return new Promise(async (resolve, reject) => {
-            const powerOnName = path_1.default.basename(localFilePath);
-            const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
-            this._logger.info(`${this._logPrefix} Validating PowerOn: ${powerOnName}`);
-            if (isOffline) {
-                this._logger.info(`${this._logPrefix} Uploading mock PowerOn (${fileName}) in Sym ${this.config.symNumber} for validation`);
-            }
-            else {
-                this._logger.info(`${this._logPrefix} Uploading PowerOn (${fileName}) to Sym ${this.config.symNumber}`);
-            }
-            await this.deployFile(types_1.SymitarAppServerFileType.POWERON, localFilePath, fileName);
-            const body = (0, helpers_1.convertFileToBinary)(localFilePath);
-            const response = await this._client.post('/root/invoke', body, {
-                headers: {
-                    'Content-Length': body.length.toString(),
-                    action: types_1.SymitarAppServerAction.POWERON_VALIDATE,
-                    poweronName: fileName,
-                    type: types_1.SymitarAppServerFileType.POWERON,
-                    validatePowerOn: 'true',
-                },
-            });
-            if (!response || response.status !== 200 || !response.data) {
-                if (isOffline) {
-                    await this.removeFile(types_1.SymitarFileType.POWERON, fileName);
-                }
-                reject('Unable to validate PowerOn from Symitar');
-            }
-            if (response.data['message'] === 'success') {
-                if (isOffline) {
-                    await this.removeFile(types_1.SymitarFileType.POWERON, fileName);
-                }
-                resolve({ isValid: true, errors: '' });
-                return;
-            }
-            const match = response.data['TaskManager_PowerOnValidateAndInstall']['message'].match(constants_1.APP_SERVER_VALIDATE_PATTERN);
-            const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
-            if (isOffline) {
-                await this.removeFile(types_1.SymitarFileType.POWERON, fileName);
-            }
-            resolve({ isValid, errors });
-        });
+        return (0, https_validate_1.validatePowerOn)(this._client, this._sshClient, this.config, localFilePath, isOffline, this._logger, this._logPrefix);
     }
     async uninstallPowerOn(powerOnName) {
+        return (0, https_uninstall_1.uninstallPowerOn)(this._sshClient, this.config, powerOnName, this._logger, this._logPrefix);
+    }
+    async executePowerOn(powerOnName, options) {
+        return (0, https_execute_1.executePowerOn)(this._client, (0, helpers_1.paddedSymNumber)(this.config.symNumber), this.config.symitarUserNumber, this.config.symitarUserPassword, powerOnName, options);
+    }
+    async fetchLatestReportByTitle(title, options) {
         if (!this._sshClient) {
-            throw new Error('Unable to uninstall PowerOn without SSH client');
+            throw new Error('SSH configuration required for report fetching');
         }
-        await this._sshClient.isReady;
-        this._logger.info(`${this._logPrefix} Uninstalling ${powerOnName} in Sym ${this.config.symNumber}...`);
-        return new Promise(async (resolve, reject) => {
-            try {
-                const transferWorker = await this._sshClient.createTransferWorker({
-                    ...this.config,
-                });
-                await transferWorker.removeFile(types_1.SymitarFileType.POWERON_INSTALLED, powerOnName);
-                resolve();
-            }
-            catch (error) {
-                this._logger.error(`${this._logPrefix} Failed to uninstall ${powerOnName} in Sym ${this.config.symNumber}: ${error.message}`);
-                reject(error);
-            }
-        });
+        return (0, https_reports_1.fetchLatestReportByTitle)(this._sshClient, this.config, title, options, this._logger, this._logPrefix);
+    }
+    async fetchReportBySequence(sequence, options) {
+        if (!this._sshClient) {
+            throw new Error('SSH configuration required for report fetching');
+        }
+        return (0, https_reports_1.fetchReportBySequence)(this._sshClient, this.config, sequence, options, this._logger, this._logPrefix);
+    }
+    async waitForBatchSequences(title, timeoutSeconds = 300) {
+        if (!this._sshClient) {
+            throw new Error('SSH configuration required for batch sequence fetching');
+        }
+        return (0, https_reports_1.waitForBatchSequences)(this._sshClient, this.config, title, timeoutSeconds, this._logger, this._logPrefix);
     }
 }
 exports.SymitarHTTPs = SymitarHTTPs;
@@ -4719,7 +4828,418 @@ exports.SymitarHTTPs = SymitarHTTPs;
 
 /***/ }),
 
-/***/ 5865:
+/***/ 34793:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.listFiles = exports.listPowerOns = void 0;
+const types_1 = __nccwpck_require__(91756);
+const ssh_list_1 = __nccwpck_require__(78437);
+const listPowerOns = async (client) => {
+    const response = await client.post('/root/invoke', null, {
+        headers: {
+            action: types_1.SymitarAppServerAction.LIST_POWERON,
+        },
+    });
+    if (!response || response.status !== 200 || !response.data) {
+        throw new Error('Unable to list PowerOns from Symitar');
+    }
+    return response.data['TaskManager_PowerOnList']['poweronList'] || [];
+};
+exports.listPowerOns = listPowerOns;
+const listFiles = async (client, sshClient, config, directory, logger, logPrefix) => {
+    if (directory === types_1.SymitarDirectory.REPWRITERSPECS) {
+        logger.debug(`${logPrefix} Listing PowerOns via Application Server API`);
+        return (0, exports.listPowerOns)(client);
+    }
+    if (!sshClient) {
+        throw new Error(`SSH configuration required to list files in ${directory}`);
+    }
+    await sshClient.isReady;
+    const internalClient = sshClient._client;
+    return (0, ssh_list_1.listFiles)(internalClient, config, directory, logger, logPrefix);
+};
+exports.listFiles = listFiles;
+//# sourceMappingURL=https.list.js.map
+
+/***/ }),
+
+/***/ 66393:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.removeFile = void 0;
+const removeFile = async (sshClient, config, type, fileName, logger, logPrefix) => {
+    if (!sshClient) {
+        throw new Error('Unable to remove file without SSH client');
+    }
+    await sshClient.isReady;
+    logger.info(`${logPrefix} Removing ${fileName} from ${type}/ in Sym ${config.symNumber}...`);
+    try {
+        const transferWorker = await sshClient.createTransferWorker({
+            ...config,
+        });
+        await transferWorker.removeFile(type, fileName);
+    }
+    catch (error) {
+        logger.error(`${logPrefix} Failed to remove ${fileName} from ${type}/ in Sym ${config.symNumber}: ${error.message}`);
+        throw error;
+    }
+};
+exports.removeFile = removeFile;
+//# sourceMappingURL=https.remove.js.map
+
+/***/ }),
+
+/***/ 71018:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.fetchLatestReportByTitle = fetchLatestReportByTitle;
+exports.fetchReportBySequence = fetchReportBySequence;
+exports.waitForBatchSequences = waitForBatchSequences;
+async function fetchLatestReportByTitle(sshClient, config, title, options, logger, logPrefix) {
+    logger.debug(`${logPrefix} Delegating report fetch to SSH client`);
+    return sshClient.fetchLatestReportByTitle(config, title, options);
+}
+async function fetchReportBySequence(sshClient, config, sequence, options, logger, logPrefix) {
+    logger.debug(`${logPrefix} Delegating report fetch to SSH client`);
+    return sshClient.fetchReportBySequence(config, sequence, options);
+}
+async function waitForBatchSequences(sshClient, config, title, timeoutSeconds, logger, logPrefix) {
+    logger.debug(`${logPrefix} Delegating batch sequence fetch to SSH client`);
+    return sshClient.waitForBatchSequences(config, title, timeoutSeconds);
+}
+//# sourceMappingURL=https.reports.js.map
+
+/***/ }),
+
+/***/ 12191:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.synchronizeFiles = void 0;
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
+const poweron_detection_1 = __nccwpck_require__(64371);
+const https_validate_1 = __nccwpck_require__(6139);
+const https_install_1 = __nccwpck_require__(8802);
+const https_uninstall_1 = __nccwpck_require__(81123);
+const synchronizeFiles = async (client, sshClient, host, config, sshConfig, localDirectory, remoteDirectory, installPowerOnList, isDryRun, logger, logPrefix, syncMode = types_1.SymitarSyncMode.MIRROR, validateIgnoreList = []) => {
+    if (syncMode === types_1.SymitarSyncMode.PULL) {
+        throw new Error('Pull mode is not supported for synchronizeFiles. Use executeRsync directly for pull operations.');
+    }
+    if (!sshClient) {
+        throw new Error('Unable to synchronize files without SSH client');
+    }
+    await sshClient.isReady;
+    const syncLogPrefix = '[SynchronizeFiles]';
+    logger.info(`${syncLogPrefix} Preparing to synchronize ${remoteDirectory} files (mode: ${syncMode})`);
+    const { deleted, deployed } = await sshClient.getChangedFiles(config, localDirectory, remoteDirectory, syncMode);
+    if (deleted.length === 0 && deployed.length === 0) {
+        logger.info(`${syncLogPrefix} No changes detected in ${remoteDirectory} files. Nothing to synchronize.`);
+        return {
+            deleted: [],
+            deployed: [],
+            installed: [],
+            uninstalled: [],
+        };
+    }
+    const isPowerOnDirectory = remoteDirectory === types_1.SymitarSyncDirectory.REPWRITERSPECS;
+    if (isPowerOnDirectory) {
+        logger.info(`${syncLogPrefix} Validating changed PowerOn files`);
+        const invalidPowerOns = [];
+        const candidateFiles = deployed
+            .filter((file) => !deleted.includes(file))
+            .filter((file) => !validateIgnoreList.includes(file));
+        if (validateIgnoreList.length > 0) {
+            const skippedByIgnoreList = deployed.filter((file) => !deleted.includes(file) && validateIgnoreList.includes(file));
+            if (skippedByIgnoreList.length > 0) {
+                logger.info(`${syncLogPrefix} Skipping validation for ${skippedByIgnoreList.length} file(s) in ignore list: ${skippedByIgnoreList.join(', ')}`);
+            }
+        }
+        const filesToValidate = [];
+        for (const poweron of candidateFiles) {
+            const filePath = `${localDirectory}/${poweron}`;
+            const skipReason = await (0, poweron_detection_1.getSkipReasonForFile)(filePath);
+            if (skipReason) {
+                logger.info(`${syncLogPrefix} Skipping validation for ${poweron}: ${skipReason}`);
+            }
+            else {
+                filesToValidate.push(poweron);
+            }
+        }
+        for (const poweron of filesToValidate) {
+            try {
+                const result = await (0, https_validate_1.validatePowerOn)(client, sshClient, config, `${localDirectory}/${poweron}`, true, logger, logPrefix);
+                if (!result.isValid) {
+                    invalidPowerOns.push({
+                        name: poweron,
+                        errors: result.errors,
+                    });
+                }
+            }
+            catch (error) {
+                logger.error(`${syncLogPrefix} Validation failed for PowerOn file ${poweron}: ${error.message}`);
+                throw error;
+            }
+        }
+        if (invalidPowerOns.length > 0) {
+            const details = invalidPowerOns
+                .map((po) => `${syncLogPrefix} - ${po.name}\n${syncLogPrefix}\n` +
+                po.errors
+                    .split('\n')
+                    .map((line) => `${syncLogPrefix}   ${line}`)
+                    .join('\n'))
+                .join('\n');
+            logger.error(`${syncLogPrefix} Invalid PowerOn files detected:\n${details}`);
+            throw new Error(`Invalid PowerOn files detected. Please fix the errors before synchronizing.`);
+        }
+    }
+    logger.info(`${syncLogPrefix} Beginning synchronization of ${remoteDirectory} files ${isDryRun ? '(Dry Run)' : ''}`);
+    try {
+        !isDryRun &&
+            (await (0, helpers_1.executeRsync)({
+                host: host,
+                ...sshConfig,
+                symNumber: config.symNumber,
+                localDirectory,
+                remoteDirectory,
+                syncMode,
+            }, isDryRun));
+        const installed = [];
+        const uninstalled = [];
+        const hasDeployedPowerOnFiles = isPowerOnDirectory &&
+            deployed.length > 0 &&
+            deployed.some((item) => installPowerOnList.includes(item));
+        const hasDeletedPowerOnFiles = isPowerOnDirectory &&
+            deleted.length > 0 &&
+            deleted.some((item) => installPowerOnList.includes(item));
+        if (hasDeployedPowerOnFiles) {
+            const installPowerOnFiles = deployed.filter((item) => installPowerOnList.includes(item));
+            logger.info(`${syncLogPrefix} Found PowerOn files to install: ${installPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
+            for (const poweron of installPowerOnFiles) {
+                if (!isDryRun) {
+                    await (0, https_install_1.installPowerOn)(client, `${localDirectory}${poweron}`);
+                }
+                else {
+                    logger.info(`${syncLogPrefix} Would install PowerOn: ${poweron} (Dry Run)`);
+                }
+            }
+        }
+        if (hasDeletedPowerOnFiles) {
+            const uninstallPowerOnFiles = deleted.filter((item) => installPowerOnList.includes(item));
+            logger.info(`${syncLogPrefix} Found PowerOn files to uninstall: ${uninstallPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
+            for (const poweron of uninstallPowerOnFiles) {
+                if (!isDryRun) {
+                    try {
+                        await (0, https_uninstall_1.uninstallPowerOn)(sshClient, config, poweron, logger, logPrefix);
+                        uninstalled.push(poweron);
+                    }
+                    catch (error) {
+                        if (error.message.includes('No such file')) {
+                            logger.info(`${syncLogPrefix} Skipping uninstall of PowerOn (not currently installed): ${poweron}`);
+                        }
+                        else {
+                            throw error;
+                        }
+                    }
+                }
+                else {
+                    logger.info(`${syncLogPrefix} Would uninstall PowerOn: ${poweron} (Dry Run)`);
+                }
+            }
+        }
+        logger.info(`${syncLogPrefix} Synchronized ${remoteDirectory} files: ${deployed.length} deployed, ${deleted.length} deleted ${isDryRun ? '(Dry Run)' : ''}`);
+        return {
+            deleted,
+            deployed,
+            installed,
+            uninstalled,
+        };
+    }
+    catch (error) {
+        logger.error(`${logPrefix} Unable to synchronize ${remoteDirectory} files: ${error.message}`);
+        throw error;
+    }
+};
+exports.synchronizeFiles = synchronizeFiles;
+//# sourceMappingURL=https.synchronize.js.map
+
+/***/ }),
+
+/***/ 81123:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.uninstallPowerOn = void 0;
+const uninstallPowerOn = async (sshClient, config, powerOnName, logger, logPrefix) => {
+    if (!sshClient) {
+        throw new Error('Unable to uninstall PowerOn without SSH client');
+    }
+    await sshClient.isReady;
+    logger.info(`${logPrefix} Uninstalling ${powerOnName} in Sym ${config.symNumber}...`);
+    try {
+        const uninstallWorker = await sshClient.createUninstallWorker(config);
+        await uninstallWorker.isReady();
+        await uninstallWorker.uninstallPowerOn(powerOnName);
+        logger.info(`${logPrefix} Successfully uninstalled ${powerOnName} in Sym ${config.symNumber}`);
+    }
+    catch (error) {
+        logger.error(`${logPrefix} Failed to uninstall ${powerOnName} in Sym ${config.symNumber}: ${error.message}`);
+        throw error;
+    }
+};
+exports.uninstallPowerOn = uninstallPowerOn;
+//# sourceMappingURL=https.uninstall.js.map
+
+/***/ }),
+
+/***/ 6139:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.validatePowerOn = void 0;
+const path_1 = __importDefault(__nccwpck_require__(16928));
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
+const constants_1 = __nccwpck_require__(93820);
+const https_remove_1 = __nccwpck_require__(66393);
+const validatePowerOn = async (client, sshClient, config, localFilePath, isOffline, logger, logPrefix) => {
+    if (isOffline && !sshClient) {
+        throw new Error('Unable to validate PowerOn without SSH client');
+    }
+    await sshClient.isReady;
+    const powerOnName = path_1.default.basename(localFilePath);
+    const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
+    logger.info(`${logPrefix} Validating PowerOn: ${powerOnName}`);
+    logger.info(`${logPrefix} Uploading and validating PowerOn (${fileName}) in Sym ${config.symNumber}`);
+    const body = await (0, helpers_1.convertFileToBinary)(localFilePath);
+    const response = await client.post('/root/invoke', body, {
+        headers: {
+            'Content-Length': body.length.toString(),
+            action: types_1.SymitarAppServerAction.POWERON_VALIDATE,
+            poweronName: fileName,
+            type: types_1.SymitarAppServerFileType.POWERON,
+            install: 'true',
+            validate: 'true',
+        },
+    });
+    logger.info(`${logPrefix} Validation response status: ${response?.status}, data: ${JSON.stringify(response?.data)}`);
+    if (!response || response.status !== 200 || !response.data) {
+        logger.error(`${logPrefix} Invalid response: status=${response?.status}, hasData=${!!response?.data}`);
+        if (isOffline) {
+            await (0, https_remove_1.removeFile)(sshClient, config, types_1.SymitarFileType.POWERON, fileName, logger, logPrefix);
+        }
+        throw new Error('Unable to validate PowerOn from Symitar');
+    }
+    if (response.data['message'] === 'success') {
+        logger.info(`${logPrefix} Validation successful (message=success)`);
+        if (isOffline) {
+            await (0, https_remove_1.removeFile)(sshClient, config, types_1.SymitarFileType.POWERON, fileName, logger, logPrefix);
+        }
+        return { isValid: true, errors: '' };
+    }
+    const taskManagerMessage = response.data['TaskManager_PowerOnValidateAndInstall']?.['message'];
+    logger.info(`${logPrefix} TaskManager message: ${taskManagerMessage?.substring(0, 500)}`);
+    const match = taskManagerMessage?.match(constants_1.APP_SERVER_VALIDATE_PATTERN);
+    logger.info(`${logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
+    const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
+    logger.info(`${logPrefix} Final result: isValid=${isValid}, errors=${errors}`);
+    if (isOffline) {
+        await (0, https_remove_1.removeFile)(sshClient, config, types_1.SymitarFileType.POWERON, fileName, logger, logPrefix);
+    }
+    return { isValid, errors };
+};
+exports.validatePowerOn = validatePowerOn;
+//# sourceMappingURL=https.validate.js.map
+
+/***/ }),
+
+/***/ 49750:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SymitarSSHExecutePowerOn = void 0;
+const rxjs_1 = __nccwpck_require__(17828);
+const types_1 = __nccwpck_require__(91756);
+const ssh_worker_1 = __nccwpck_require__(35423);
+class SymitarSSHExecutePowerOn extends ssh_worker_1.SymitarSSHWorker {
+    get logPrefix() {
+        return `[SymitarSSHExecutePowerOn]`;
+    }
+    handleData(data) {
+        if (data.includes(types_1.SymitarCLIExecutePrompts.POWERON_FILE)) {
+            this.logger.debug(`${this.logPrefix} Matched Execute worker ready prompt`);
+            this.setState('ready');
+        }
+    }
+    async executePowerOn(powerOnName, options) {
+        await this.isReady();
+        this.logger.info(`${this.logPrefix} Executing PowerOn: ${powerOnName}`);
+        try {
+            const title = await this.submitBatchJob(powerOnName, options);
+            return {
+                success: true,
+                report: {},
+                title,
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                report: {},
+                error: error instanceof Error ? error.message : 'Failed to submit batch job',
+            };
+        }
+    }
+    async submitBatchJob(powerOnName, options) {
+        this.setState('executing');
+        const queue = options?.batchQueue !== undefined ? String(options.batchQueue) : '';
+        const commands = [
+            `${powerOnName}\r`,
+            '\r',
+            'y\r',
+            'n\r',
+            'y\r',
+            '\r',
+            '\r',
+            '\r',
+            `${queue}\r`,
+            'y\r',
+            '1\r',
+            '\r',
+            '11\r',
+        ];
+        this.send(commands);
+        await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.filter)((d) => d.includes(types_1.SymitarCLIExecutePrompts.POWERON_FILE)), (0, rxjs_1.take)(1)));
+        this.setState('ready');
+        return powerOnName;
+    }
+}
+exports.SymitarSSHExecutePowerOn = SymitarSSHExecutePowerOn;
+//# sourceMappingURL=ssh.execute.js.map
+
+/***/ }),
+
+/***/ 454:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4765,12 +5285,38 @@ exports.SymitarSSHInstallPowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
 const rxjs_1 = __nccwpck_require__(17828);
-const helpers_1 = __nccwpck_require__(92445);
-const types_1 = __nccwpck_require__(24709);
-const ssh_worker_1 = __nccwpck_require__(39686);
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
+const ssh_worker_1 = __nccwpck_require__(35423);
+async function sendInstallCommand(worker, powerOnName) {
+    worker['setState']('executing');
+    worker['send']([`${powerOnName}\r`, 'y\r']);
+    await (0, rxjs_1.lastValueFrom)(worker['data$'].pipe((0, rxjs_1.filter)((d) => [`:_`].some((t) => d.toString().includes(t))), (0, rxjs_1.take)(1)));
+}
 class SymitarSSHInstallPowerOn extends ssh_worker_1.SymitarSSHWorker {
+    _sftp = null;
     get logPrefix() {
         return `[SymitarSSHInstallPowerOn]`;
+    }
+    async getSftp() {
+        if (this._sftp)
+            return this._sftp;
+        return new Promise((resolve, reject) => {
+            this.client.sftp((err, sftp) => {
+                if (err)
+                    return reject(err);
+                this._sftp = sftp;
+                this.logger.debug(`${this.logPrefix} SFTP channel opened`);
+                resolve(sftp);
+            });
+        });
+    }
+    end() {
+        if (this._sftp) {
+            this._sftp.end();
+            this.logger.debug(`${this.logPrefix} SFTP channel closed`);
+        }
+        super.end();
     }
     handleData(data) {
         if (data.includes(types_1.SymitarCLIInstallPrompts.POWERON_FILE_NAME)) {
@@ -4780,48 +5326,27 @@ class SymitarSSHInstallPowerOn extends ssh_worker_1.SymitarSSHWorker {
     }
     async installPowerOn(localFilePath) {
         await this.isReady();
-        return new Promise((resolve, reject) => {
-            this.client.sftp((sftpError, sftp) => {
-                if (sftpError)
-                    return reject(sftpError);
-                const powerOnName = path_1.default.basename(localFilePath);
-                const remoteFilePath = `/SYM/SYM${(0, helpers_1.paddedSymNumber)(this.config.symNumber)}/REPWRITERSPECS/${powerOnName}`;
-                this.logger.info(`${this.logPrefix} Uploading PowerOn (${powerOnName}) to Sym ${this.config.symNumber}`);
-                fs.readFile(localFilePath, 'utf8', (readErr, data) => {
-                    if (readErr)
-                        return reject(readErr);
-                    const lfData = data.replace(/\r\n/g, '\n');
-                    sftp.writeFile(remoteFilePath, Buffer.from(lfData, 'utf8'), async (putError) => {
-                        if (putError)
-                            return reject(putError);
-                        this.logger.info(`${this.logPrefix} Installing PowerOn: ${powerOnName}`);
-                        this.setState('executing');
-                        this.send([`${powerOnName}\r`, 'y\r']);
-                        await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.filter)((d) => [`:_`].some((t) => d.toString().includes(t))), (0, rxjs_1.take)(1)));
-                        resolve();
-                    });
-                });
-            });
-        });
-    }
-    async uninstallPowerOn(powerOnName) {
-        const remoteFilePath = `/SYM/SYM${(0, helpers_1.paddedSymNumber)(this.config.symNumber)}/REPWRITERCODES/${powerOnName}`;
-        await this.isReady();
-        this.logger.info(`${this.logPrefix} Uninstalling ${powerOnName} in Sym ${this.config.symNumber}...`);
-        this.setState('executing');
-        return new Promise((resolve, reject) => {
-            this.client.sftp((sftpError, sftp) => {
-                if (sftpError)
-                    return reject(sftpError);
-                sftp.unlink(remoteFilePath, (unlinkError) => {
-                    if (unlinkError)
-                        return reject(unlinkError);
-                    this.logger.info(`${this.logPrefix} Successfully uninstalled ${powerOnName} in Sym ${this.config.symNumber}`);
-                    this.setState('ready');
+        const sftp = await this.getSftp();
+        const powerOnName = path_1.default.basename(localFilePath);
+        const remoteFilePath = `/SYM/SYM${(0, helpers_1.paddedSymNumber)(this.config.symNumber)}/REPWRITERSPECS/${powerOnName}`;
+        this.logger.info(`${this.logPrefix} Uploading PowerOn (${powerOnName}) to Sym ${this.config.symNumber}`);
+        const data = await fs.promises.readFile(localFilePath, 'utf8');
+        const lfData = data.replace(/\r\n/g, '\n');
+        await new Promise((resolve, reject) => {
+            sftp.writeFile(remoteFilePath, Buffer.from(lfData, 'utf8'), (err) => {
+                if (err)
+                    reject(err);
+                else
                     resolve();
-                });
             });
         });
+        this.logger.info(`${this.logPrefix} Installing PowerOn: ${powerOnName}`);
+        await sendInstallCommand(this, powerOnName);
+    }
+    async installPowerOnByName(powerOnName) {
+        await this.isReady();
+        this.logger.info(`${this.logPrefix} Installing PowerOn: ${powerOnName}`);
+        await sendInstallCommand(this, powerOnName);
     }
 }
 exports.SymitarSSHInstallPowerOn = SymitarSSHInstallPowerOn;
@@ -4829,7 +5354,7 @@ exports.SymitarSSHInstallPowerOn = SymitarSSHInstallPowerOn;
 
 /***/ }),
 
-/***/ 45728:
+/***/ 14339:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4841,12 +5366,17 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSH = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const ssh2_1 = __nccwpck_require__(41828);
-const winston_1 = __importDefault(__nccwpck_require__(68360));
-const ssh_validate_1 = __nccwpck_require__(58786);
-const ssh_transfer_1 = __nccwpck_require__(3275);
-const ssh_install_1 = __nccwpck_require__(5865);
-const types_1 = __nccwpck_require__(24709);
-const helpers_1 = __nccwpck_require__(92445);
+const ssh_validate_1 = __nccwpck_require__(32383);
+const ssh_transfer_1 = __nccwpck_require__(70494);
+const ssh_install_1 = __nccwpck_require__(454);
+const ssh_uninstall_1 = __nccwpck_require__(57943);
+const ssh_execute_1 = __nccwpck_require__(49750);
+const ssh_synchronize_1 = __nccwpck_require__(76691);
+const ssh_list_1 = __nccwpck_require__(78437);
+const types_1 = __nccwpck_require__(91756);
+const helpers_1 = __nccwpck_require__(68400);
+const logging_1 = __nccwpck_require__(58924);
+const ssh_reports_1 = __nccwpck_require__(63686);
 class SymitarSSH {
     _client = new ssh2_1.Client();
     _connected = false;
@@ -4854,13 +5384,9 @@ class SymitarSSH {
     _logger;
     _config;
     isReady;
-    constructor(config, logLevel = 'info') {
+    constructor(config, logLevel = 'info', customLogger) {
         this._config = config;
-        this._logger = winston_1.default.createLogger({
-            level: logLevel,
-            format: winston_1.default.format.combine(winston_1.default.format.colorize(), winston_1.default.format.printf(({ message }) => `${message}`)),
-            transports: [new winston_1.default.transports.Console()],
-        });
+        this._logger = (0, logging_1.createLogger)(logLevel, customLogger);
         this.isReady = new Promise((resolve, reject) => {
             this._client
                 .on('ready', () => {
@@ -4886,7 +5412,8 @@ class SymitarSSH {
             await this.isReady;
         if ([
             types_1.SymitarWorkerType.INSTALL_POWERON,
-            types_1.SymitarWorkerType.RUN_POWERON,
+            types_1.SymitarWorkerType.UNINSTALL_POWERON,
+            types_1.SymitarWorkerType.EXECUTE_POWERON,
             types_1.SymitarWorkerType.VALIDATE_POWERON,
         ].includes(type)) {
             return new Promise((resolve, reject) => {
@@ -4905,6 +5432,12 @@ class SymitarSSH {
                     switch (type) {
                         case types_1.SymitarWorkerType.INSTALL_POWERON:
                             worker = new ssh_install_1.SymitarSSHInstallPowerOn(...args);
+                            break;
+                        case types_1.SymitarWorkerType.UNINSTALL_POWERON:
+                            worker = new ssh_uninstall_1.SymitarSSHUninstallPowerOn(...args);
+                            break;
+                        case types_1.SymitarWorkerType.EXECUTE_POWERON:
+                            worker = new ssh_execute_1.SymitarSSHExecutePowerOn(...args);
                             break;
                         case types_1.SymitarWorkerType.VALIDATE_POWERON:
                             worker = new ssh_validate_1.SymitarSSHValidatePowerOn(...args);
@@ -4930,149 +5463,31 @@ class SymitarSSH {
             this._logger.warn(`${this._logPrefix} Fetching reports is not currently supported`);
         }
     }
-    async getChangedPowerOns(symitarConfig, localPowerOnDirectory) {
-        const logPrefix = `[GetChangedPowerOns]`;
-        return new Promise(async (resolve, reject) => {
-            try {
-                const changedPowerOns = await (0, helpers_1.executePowerOnRsync)({
-                    host: this._config.host,
-                    username: this._config.username,
-                    password: this._config.password,
-                    symNumber: symitarConfig.symNumber,
-                    directory: localPowerOnDirectory,
-                }, true);
-                resolve(changedPowerOns);
-            }
-            catch (error) {
-                this._logger.error(`${logPrefix} Unable to get changed PowerOn files: ${error.message}`);
-                reject(error);
-            }
-        });
+    async getChangedFiles(symitarConfig, localDirectory, remoteDirectory = types_1.SymitarSyncDirectory.REPWRITERSPECS, syncMode = types_1.SymitarSyncMode.MIRROR) {
+        return (0, ssh_synchronize_1.getChangedFiles)(this._config, symitarConfig, localDirectory, remoteDirectory, this._logger, syncMode);
     }
-    async synchronizePowerOns(symitarConfig, localPowerOnDirectory, installPowerOnList, isDryRun = true) {
-        const logPrefix = '[SynchronizePowerOns]';
-        return new Promise(async (resolve, reject) => {
-            const { deleted, deployed } = await this.getChangedPowerOns(symitarConfig, localPowerOnDirectory);
-            if (deleted.length === 0 && deployed.length === 0) {
-                this._logger.info(`${logPrefix} No changes detected in PowerOn files. Nothing to synchronize.`);
-                return resolve({
-                    deleted: [],
-                    deployed: [],
-                    installed: [],
-                    uninstalled: [],
-                });
-            }
-            this._logger.info(`${logPrefix} Validating changed PowerOn files`);
-            const invalidPowerOns = [];
-            const validateWorker = await this.createValidateWorker(symitarConfig);
-            const validatePowerOns = deployed.filter((file) => !deleted.includes(file));
-            for (const poweron of validatePowerOns) {
-                try {
-                    const result = await validateWorker.validatePowerOn(`${localPowerOnDirectory}/${poweron}`);
-                    if (!result.isValid) {
-                        invalidPowerOns.push({
-                            name: poweron,
-                            errors: result.errors,
-                        });
-                    }
-                }
-                catch (error) {
-                    this._logger.error(`${logPrefix} Validation failed for PowerOn file ${poweron}: ${error.message}`);
-                    reject(error);
-                }
-            }
-            if (invalidPowerOns.length > 0) {
-                const details = invalidPowerOns
-                    .map((po) => `${logPrefix} - ${po.name}\n${logPrefix}\n` +
-                    po.errors
-                        .split('\n')
-                        .map((line) => `${logPrefix}   ${line}`)
-                        .join('\n'))
-                    .join('\n');
-                this._logger.error(`${logPrefix} Invalid PowerOn files detected:\n${details}`);
-                return reject(new Error(`Invalid PowerOn files detected. Please fix the errors before synchronizing.`));
-            }
-            this._logger.info(`${logPrefix} Beginning synchronization of PowerOn files ${isDryRun ? '(Dry Run)' : ''}`);
-            try {
-                !isDryRun &&
-                    (await (0, helpers_1.executePowerOnRsync)({
-                        host: this._config.host,
-                        username: this._config.username,
-                        password: this._config.password,
-                        symNumber: symitarConfig.symNumber,
-                        directory: localPowerOnDirectory,
-                    }, isDryRun));
-                let installWorker;
-                const hasDeployedPowerOnFiles = deployed.length > 0 &&
-                    deployed.some((item) => installPowerOnList.includes(item));
-                const hasDeletedPowerOnFiles = deleted.length > 0 &&
-                    deleted.some((item) => installPowerOnList.includes(item));
-                const installed = [];
-                const uninstalled = [];
-                if (!isDryRun && (hasDeployedPowerOnFiles || hasDeletedPowerOnFiles)) {
-                    this._logger.info(`${logPrefix} Initializing PowerOn install worker for Sym ${symitarConfig.symNumber}`);
-                    installWorker = await this.createInstallWorker(symitarConfig);
-                }
-                else if (hasDeployedPowerOnFiles || hasDeletedPowerOnFiles) {
-                    this._logger.info(`${logPrefix} Would initialize PowerOn install worker for Sym ${symitarConfig.symNumber} (Dry Run)`);
-                }
-                if (hasDeployedPowerOnFiles) {
-                    const installPowerOnFiles = deployed.filter((item) => installPowerOnList.includes(item));
-                    this._logger.info(`${logPrefix} Found PowerOn files to install: ${installPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
-                    for (const poweron of installPowerOnFiles) {
-                        if (!isDryRun) {
-                            await installWorker.installPowerOn(`${localPowerOnDirectory}${poweron}`);
-                        }
-                        else {
-                            this._logger.info(`${logPrefix} Would install PowerOn: ${poweron} (Dry Run)`);
-                        }
-                    }
-                }
-                if (hasDeletedPowerOnFiles) {
-                    const uninstallPowerOnFiles = deleted.filter((item) => installPowerOnList.includes(item));
-                    this._logger.info(`${logPrefix} Found PowerOn files to uninstall: ${uninstallPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
-                    for (const poweron of uninstallPowerOnFiles) {
-                        if (!isDryRun) {
-                            try {
-                                await installWorker.uninstallPowerOn(poweron);
-                                uninstalled.push(poweron);
-                            }
-                            catch (error) {
-                                if (error.message.includes('No such file')) {
-                                    this._logger.info(`${logPrefix} Skipping uninstall of PowerOn (not currently installed): ${poweron}`);
-                                }
-                                else {
-                                    throw error;
-                                }
-                            }
-                        }
-                        else {
-                            this._logger.info(`${logPrefix} Would uninstall PowerOn: ${poweron} (Dry Run)`);
-                        }
-                    }
-                }
-                this._logger.info(`${logPrefix} Synchronized PowerOn files: ${deployed.length} deployed, ${deleted.length} deleted ${isDryRun ? '(Dry Run)' : ''}`);
-                return resolve({
-                    deleted,
-                    deployed,
-                    installed,
-                    uninstalled,
-                });
-            }
-            catch (error) {
-                this._logger.error(`${this._logPrefix} Unable to synchronize PowerOn files: ${error.message}`);
-                return reject(error);
-            }
-        });
+    async listFiles(symitarConfig, directory) {
+        if (!this._connected)
+            await this.isReady;
+        return (0, ssh_list_1.listFiles)(this._client, symitarConfig, directory, this._logger, this._logPrefix);
+    }
+    async synchronizeFiles(symitarConfig, localDirectory, installPowerOnList, isDryRun = true, remoteDirectory = types_1.SymitarSyncDirectory.REPWRITERSPECS, syncMode = types_1.SymitarSyncMode.MIRROR, validateIgnoreList = []) {
+        return (0, ssh_synchronize_1.synchronizeFiles)(this._config, symitarConfig, localDirectory, remoteDirectory, installPowerOnList, isDryRun, this._logger, () => this.createValidateWorker(symitarConfig), () => this.createInstallWorker(symitarConfig), () => this.createUninstallWorker(symitarConfig), syncMode, validateIgnoreList);
     }
     async createInstallWorker(config) {
         return this.createWorker(types_1.SymitarWorkerType.INSTALL_POWERON, config);
+    }
+    async createUninstallWorker(config) {
+        return this.createWorker(types_1.SymitarWorkerType.UNINSTALL_POWERON, config);
     }
     async createTransferWorker(config) {
         return this.createWorker(types_1.SymitarWorkerType.TRANSFER_FILE, config);
     }
     async createValidateWorker(config) {
         return this.createWorker(types_1.SymitarWorkerType.VALIDATE_POWERON, config);
+    }
+    async createExecuteWorker(config) {
+        return this.createWorker(types_1.SymitarWorkerType.EXECUTE_POWERON, config);
     }
     end() {
         return new Promise((resolve) => {
@@ -5084,16 +5499,38 @@ class SymitarSSH {
         });
     }
     async isRemoteFileEqual(symNumber, fileType, localFilePath) {
-        return new Promise(async (resolve, reject) => {
-            if (fileType === types_1.SymitarFileType.POWERON) {
-                const localHash = await (0, helpers_1.computeFileHash)(localFilePath);
-                const remoteHash = await (0, helpers_1.computeRemoteFileHash)(this._client, `/SYM/SYM${(0, helpers_1.paddedSymNumber)(symNumber)}/REPWRITERSPECS/${path_1.default.basename(localFilePath)}`);
-                resolve(localHash === remoteHash);
-            }
-            else {
-                reject(new Error(`Unsupported file type for hash comparison: ${fileType}`));
-            }
-        });
+        if (fileType === types_1.SymitarFileType.POWERON) {
+            const localHash = await (0, helpers_1.computeFileHash)(localFilePath);
+            const remoteHash = await (0, helpers_1.computeRemoteFileHash)(this._client, `/SYM/SYM${(0, helpers_1.paddedSymNumber)(symNumber)}/REPWRITERSPECS/${path_1.default.basename(localFilePath)}`);
+            return localHash === remoteHash;
+        }
+        else {
+            throw new Error(`Unsupported file type for hash comparison: ${fileType}`);
+        }
+    }
+    async fetchLatestReportByTitle(config, title, options) {
+        if (!this._connected)
+            await this.isReady;
+        return (0, ssh_reports_1.fetchLatestReportByTitle)(this._client, config, title, options, this._logger, this._logPrefix);
+    }
+    async fetchReportBySequence(config, sequence, options) {
+        if (!this._connected)
+            await this.isReady;
+        return (0, ssh_reports_1.fetchReportBySequence)(this._client, config, sequence, options, this._logger, this._logPrefix);
+    }
+    async waitForBatchSequences(config, title, timeoutSeconds = 300) {
+        if (!this._connected)
+            await this.isReady;
+        return (0, ssh_reports_1.waitForBatchSequences)(this._client, config, title, timeoutSeconds, this._logger, this._logPrefix);
+    }
+    async executePowerOn(config, powerOnName, options) {
+        const worker = await this.createExecuteWorker(config);
+        try {
+            return await worker.executePowerOn(powerOnName, options);
+        }
+        finally {
+            worker.end();
+        }
     }
 }
 exports.SymitarSSH = SymitarSSH;
@@ -5101,7 +5538,450 @@ exports.SymitarSSH = SymitarSSH;
 
 /***/ }),
 
-/***/ 3275:
+/***/ 78437:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.listFiles = listFiles;
+const helpers_1 = __nccwpck_require__(68400);
+function execCommand(client, command) {
+    return new Promise((resolve, reject) => {
+        client.exec(command, (err, stream) => {
+            if (err)
+                return reject(err);
+            let stdout = '';
+            let stderr = '';
+            stream
+                .on('close', (code) => {
+                resolve({ stdout, stderr, code: code || 0 });
+            })
+                .on('data', (data) => {
+                stdout += data.toString();
+            })
+                .stderr.on('data', (data) => {
+                stderr += data.toString();
+            });
+        });
+    });
+}
+async function listFiles(client, config, directory, logger, logPrefix) {
+    const symNumber = (0, helpers_1.paddedSymNumber)(config.symNumber);
+    const remotePath = `/SYM/SYM${symNumber}/${directory}`;
+    logger.debug(`${logPrefix} Listing files in ${remotePath}`);
+    const result = await execCommand(client, `ls -1 "${remotePath}" 2>/dev/null`);
+    if (result.code !== 0) {
+        if (result.stderr.includes('No such file or directory')) {
+            logger.warn(`${logPrefix} Directory does not exist: ${remotePath}`);
+            return [];
+        }
+        throw new Error(`Failed to list files: ${result.stderr}`);
+    }
+    const files = result.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    logger.debug(`${logPrefix} Found ${files.length} files in ${directory}`);
+    return files;
+}
+//# sourceMappingURL=ssh.list.js.map
+
+/***/ }),
+
+/***/ 63686:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.fetchLatestReportByTitle = fetchLatestReportByTitle;
+exports.fetchReportBySequence = fetchReportBySequence;
+exports.waitForBatchSequences = waitForBatchSequences;
+const helpers_1 = __nccwpck_require__(68400);
+const scripts_1 = __nccwpck_require__(20797);
+const SCRIPT_DIR = '.libum';
+const DEFAULT_TIMEOUT = 30000;
+function execCommand(client, command, logger, logPrefix) {
+    return new Promise((resolve, reject) => {
+        logger?.debug(`${logPrefix} Executing command: ${command.substring(0, 100)}...`);
+        client.exec(command, (err, stream) => {
+            if (err) {
+                logger?.error(`${logPrefix} Command exec error: ${err.message}`);
+                return reject(err);
+            }
+            let stdout = '';
+            let stderr = '';
+            stream
+                .on('close', (code) => {
+                logger?.debug(`${logPrefix} Command finished with code: ${code}`);
+                if (stdout) {
+                    logger?.debug(`${logPrefix} stdout: ${stdout.substring(0, 200)}...`);
+                }
+                if (stderr) {
+                    logger?.debug(`${logPrefix} stderr: ${stderr}`);
+                }
+                resolve({ stdout, stderr, code: code || 0 });
+            })
+                .on('data', (data) => {
+                stdout += data.toString();
+            })
+                .stderr.on('data', (data) => {
+                stderr += data.toString();
+            });
+        });
+    });
+}
+function computeHash(content) {
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+        const char = content.charCodeAt(i);
+        hash = (hash << 5) - hash + char;
+        hash = hash & hash;
+    }
+    return Math.abs(hash).toString(16);
+}
+async function ensureScriptUploaded(client, scriptName, scriptContent, logger, logPrefix) {
+    const remotePath = `${SCRIPT_DIR}/${scriptName}`;
+    const hashPath = `${SCRIPT_DIR}/${scriptName}.hash`;
+    const localHash = computeHash(scriptContent);
+    logger.info(`${logPrefix} Ensuring script uploaded: ${scriptName}`);
+    try {
+        logger.debug(`${logPrefix} Creating directory ${SCRIPT_DIR}`);
+        await execCommand(client, `mkdir -p ${SCRIPT_DIR}`, logger, logPrefix);
+        logger.debug(`${logPrefix} Checking script hash at ${hashPath}`);
+        const hashResult = await execCommand(client, `cat ${hashPath} 2>/dev/null || echo ""`, logger, logPrefix);
+        const remoteHash = hashResult.stdout.trim();
+        if (remoteHash !== localHash) {
+            logger.info(`${logPrefix} Uploading script ${scriptName} (hash: ${localHash}, remote: ${remoteHash || 'none'})`);
+            await execCommand(client, `cat > ${remotePath} << 'SCRIPT_EOF'
+${scriptContent}
+SCRIPT_EOF`, logger, logPrefix);
+            await execCommand(client, `chmod +x ${remotePath}`, logger, logPrefix);
+            await execCommand(client, `echo "${localHash}" > ${hashPath}`, logger, logPrefix);
+            logger.info(`${logPrefix} Script uploaded successfully`);
+        }
+        else {
+            logger.debug(`${logPrefix} Script already up to date`);
+        }
+        return remotePath;
+    }
+    catch (error) {
+        logger.error(`${logPrefix} Failed to upload script: ${error instanceof Error ? error.message : error}`);
+        throw error;
+    }
+}
+async function execWithTimeout(client, command, timeoutMs, logger, logPrefix) {
+    const scriptName = command.split(' ')[0].split('/').pop();
+    logger.info(`${logPrefix} Running script '${scriptName}' with timeout ${timeoutMs / 1000}s`);
+    logger.info(`${logPrefix} Full command: ${command}`);
+    const execPromise = execCommand(client, command, logger, logPrefix);
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), timeoutMs));
+    const result = await Promise.race([execPromise, timeoutPromise]);
+    if ('timeout' in result && result.timeout) {
+        logger.warn(`${logPrefix} Command '${scriptName}' timed out after ${timeoutMs / 1000}s`);
+        try {
+            const safeCmd = command.split(' ')[0];
+            const killCmd = `ps -ef | grep "${safeCmd}" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null`;
+            await execCommand(client, killCmd, logger, logPrefix);
+        }
+        catch {
+        }
+        throw new Error(`Command '${scriptName}' timed out after ${timeoutMs / 1000} seconds`);
+    }
+    const execResult = result;
+    logger.info(`${logPrefix} Script '${scriptName}' completed with code ${execResult.code}`);
+    if (execResult.stderr && execResult.code !== 0) {
+        logger.error(`${logPrefix} Script stderr: ${execResult.stderr}`);
+        throw new Error(execResult.stderr);
+    }
+    if (execResult.code !== 0) {
+        logger.error(`${logPrefix} Script failed with stdout: ${execResult.stdout}`);
+        throw new Error(execResult.stdout || 'Command failed');
+    }
+    logger.debug(`${logPrefix} Script output: ${execResult.stdout.substring(0, 500)}`);
+    return execResult.stdout;
+}
+async function fetchLatestReportByTitle(client, config, title, options, logger, logPrefix) {
+    logger.info(`${logPrefix} Fetching latest report by title: "${title}"`);
+    const scriptPath = await ensureScriptUploaded(client, 'get_latest_report.sh', scripts_1.GET_LATEST_REPORT, logger, logPrefix);
+    const symNumber = (0, helpers_1.paddedSymNumber)(config.symNumber);
+    const hourArg = options?.hourLookback ? ` "${options.hourLookback}"` : '';
+    const command = `${scriptPath} "${symNumber}" "${title}"${hourArg}`;
+    logger.info(`${logPrefix} Searching for report with sym=${symNumber}, title="${title}", hourLookback=${options?.hourLookback ?? 'default'}`);
+    const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
+    const stdout = await execWithTimeout(client, command, timeout, logger, logPrefix);
+    const lines = stdout.split('\n');
+    const headerMatch = lines[0]?.match(/^Report (\d+)/);
+    if (!headerMatch) {
+        logger.error(`${logPrefix} Failed to parse report header. First line: "${lines[0]}"`);
+        logger.error(`${logPrefix} Full output:\n${stdout}`);
+        throw new Error(`Failed to parse report output: ${lines[0]}`);
+    }
+    const sequence = headerMatch[1];
+    const jobSequenceStart = stdout.indexOf('<<<JOB_SEQUENCE>>>');
+    const jobSequenceEnd = stdout.indexOf('<<<END_JOB_SEQUENCE>>>');
+    const batchSummaryStart = stdout.indexOf('<<<BATCH_SUMMARY>>>');
+    const batchSummaryEnd = stdout.indexOf('<<<END_BATCH_SUMMARY>>>');
+    const reportContentStart = stdout.indexOf('<<<REPORT_CONTENT>>>');
+    let batchSummarySequence;
+    let batchSummary;
+    let content;
+    if (jobSequenceStart !== -1 && jobSequenceEnd !== -1) {
+        batchSummarySequence = stdout
+            .substring(jobSequenceStart + '<<<JOB_SEQUENCE>>>'.length, jobSequenceEnd)
+            .trim();
+    }
+    if (batchSummaryStart !== -1 &&
+        batchSummaryEnd !== -1 &&
+        reportContentStart !== -1) {
+        batchSummary = stdout
+            .substring(batchSummaryStart + '<<<BATCH_SUMMARY>>>'.length, batchSummaryEnd)
+            .trim();
+        content = stdout
+            .substring(reportContentStart + '<<<REPORT_CONTENT>>>'.length)
+            .trim();
+    }
+    else {
+        logger.warn(`${logPrefix} Could not find section markers, using fallback`);
+        content = lines.slice(1).join('\n');
+    }
+    logger.info(`${logPrefix} Found report with sequence: ${sequence}${batchSummarySequence ? `, batch summary sequence: ${batchSummarySequence}` : ''}`);
+    return {
+        sequence,
+        title,
+        content,
+        batchSummary,
+        batchSummarySequence,
+    };
+}
+async function fetchReportBySequence(client, config, sequence, options, logger, logPrefix) {
+    logger.info(`${logPrefix} Fetching report by sequence: ${sequence}`);
+    const scriptPath = await ensureScriptUploaded(client, 'get_report_by_sequence.sh', scripts_1.GET_REPORT_BY_SEQUENCE, logger, logPrefix);
+    const symNumber = (0, helpers_1.paddedSymNumber)(config.symNumber);
+    const command = `${scriptPath} "${symNumber}" "${sequence}"`;
+    logger.info(`${logPrefix} Fetching report with sym=${symNumber}, sequence=${sequence}`);
+    const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
+    const stdout = await execWithTimeout(client, command, timeout, logger, logPrefix);
+    const lines = stdout.split('\n');
+    const content = lines.slice(1).join('\n');
+    logger.info(`${logPrefix} Successfully fetched report ${sequence}`);
+    return {
+        sequence,
+        content,
+    };
+}
+async function waitForBatchSequences(client, config, title, timeoutSeconds, logger, logPrefix) {
+    logger.info(`${logPrefix} Waiting for batch sequences with title: "${title}" (timeout: ${timeoutSeconds}s)`);
+    const scriptPath = await ensureScriptUploaded(client, 'get_batch_sequences.sh', scripts_1.GET_BATCH_SEQUENCES, logger, logPrefix);
+    const symNumber = (0, helpers_1.paddedSymNumber)(config.symNumber);
+    const command = `${scriptPath} "${symNumber}" "${title}" "${timeoutSeconds}"`;
+    logger.info(`${logPrefix} Polling for batch job with sym=${symNumber}, title="${title}"`);
+    const timeout = (timeoutSeconds + 60) * 1000;
+    const stdout = await execWithTimeout(client, command, timeout, logger, logPrefix);
+    const parts = stdout.trim().split(',');
+    logger.debug(`${logPrefix} Batch output parts: ${JSON.stringify(parts)}`);
+    if (parts.length === 0) {
+        logger.error(`${logPrefix} No batch sequences found in output`);
+        throw new Error('No batch sequences found');
+    }
+    const jobFilename = parts[parts.length - 1];
+    const sequences = parts.slice(0, -1).filter((s) => s.length > 0);
+    logger.info(`${logPrefix} Found ${sequences.length} sequences, job file: ${jobFilename}`);
+    return {
+        sequences,
+        jobFilename,
+    };
+}
+//# sourceMappingURL=ssh.reports.js.map
+
+/***/ }),
+
+/***/ 76691:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.synchronizeFiles = exports.getChangedFiles = void 0;
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
+const poweron_detection_1 = __nccwpck_require__(64371);
+const getChangedFiles = async (sshConfig, symitarConfig, localDirectory, remoteDirectory, logger, syncMode = types_1.SymitarSyncMode.MIRROR) => {
+    const logPrefix = '[GetChangedFiles]';
+    try {
+        logger.debug(`${logPrefix} Checking for changed files in ${remoteDirectory} (mode: ${syncMode})`);
+        const changedFiles = await (0, helpers_1.executeRsync)({
+            host: sshConfig.host,
+            username: sshConfig.username,
+            password: sshConfig.password,
+            symNumber: symitarConfig.symNumber,
+            localDirectory,
+            remoteDirectory,
+            syncMode,
+        }, true);
+        return changedFiles;
+    }
+    catch (error) {
+        logger.error(`${logPrefix} Unable to get changed files: ${error.message}`);
+        throw error;
+    }
+};
+exports.getChangedFiles = getChangedFiles;
+const synchronizeFiles = async (sshConfig, symitarConfig, localDirectory, remoteDirectory, installPowerOnList, isDryRun, logger, createValidateWorker, createInstallWorker, createUninstallWorker, syncMode = types_1.SymitarSyncMode.MIRROR, validateIgnoreList = []) => {
+    const logPrefix = '[SynchronizeFiles]';
+    if (syncMode === types_1.SymitarSyncMode.PULL) {
+        throw new Error('Pull mode is not supported for synchronizeFiles. Use executeRsync directly for pull operations.');
+    }
+    const { deleted, deployed } = await (0, exports.getChangedFiles)(sshConfig, symitarConfig, localDirectory, remoteDirectory, logger, syncMode);
+    if (deleted.length === 0 && deployed.length === 0) {
+        logger.info(`${logPrefix} No changes detected in ${remoteDirectory} files. Nothing to synchronize.`);
+        return {
+            deleted: [],
+            deployed: [],
+            installed: [],
+            uninstalled: [],
+        };
+    }
+    const isPowerOnDirectory = remoteDirectory === types_1.SymitarSyncDirectory.REPWRITERSPECS;
+    if (isPowerOnDirectory) {
+        logger.info(`${logPrefix} Validating changed PowerOn files`);
+        const invalidPowerOns = [];
+        const candidateFiles = deployed
+            .filter((file) => !deleted.includes(file))
+            .filter((file) => !validateIgnoreList.includes(file));
+        if (validateIgnoreList.length > 0) {
+            const skippedByIgnoreList = deployed.filter((file) => !deleted.includes(file) && validateIgnoreList.includes(file));
+            if (skippedByIgnoreList.length > 0) {
+                logger.info(`${logPrefix} Skipping validation for ${skippedByIgnoreList.length} file(s) in ignore list: ${skippedByIgnoreList.join(', ')}`);
+            }
+        }
+        const filesToValidate = [];
+        for (const poweron of candidateFiles) {
+            const filePath = `${localDirectory}/${poweron}`;
+            const skipReason = await (0, poweron_detection_1.getSkipReasonForFile)(filePath);
+            if (skipReason) {
+                logger.info(`${logPrefix} Skipping validation for ${poweron}: ${skipReason}`);
+            }
+            else {
+                filesToValidate.push(poweron);
+            }
+        }
+        if (filesToValidate.length > 0) {
+            const validateWorker = await createValidateWorker();
+            for (const poweron of filesToValidate) {
+                try {
+                    const result = await validateWorker.validatePowerOn(`${localDirectory}/${poweron}`);
+                    if (!result.isValid) {
+                        invalidPowerOns.push({
+                            name: poweron,
+                            errors: result.errors,
+                        });
+                    }
+                }
+                catch (error) {
+                    logger.error(`${logPrefix} Validation failed for PowerOn file ${poweron}: ${error.message}`);
+                    throw error;
+                }
+            }
+        }
+        if (invalidPowerOns.length > 0) {
+            const details = invalidPowerOns
+                .map((po) => `${logPrefix} - ${po.name}\n${logPrefix}\n` +
+                po.errors
+                    .split('\n')
+                    .map((line) => `${logPrefix}   ${line}`)
+                    .join('\n'))
+                .join('\n');
+            logger.error(`${logPrefix} Invalid PowerOn files detected:\n${details}`);
+            throw new Error(`Invalid PowerOn files detected. Please fix the errors before synchronizing.`);
+        }
+    }
+    logger.info(`${logPrefix} Beginning synchronization of ${remoteDirectory} files ${isDryRun ? '(Dry Run)' : ''}`);
+    try {
+        !isDryRun &&
+            (await (0, helpers_1.executeRsync)({
+                host: sshConfig.host,
+                username: sshConfig.username,
+                password: sshConfig.password,
+                symNumber: symitarConfig.symNumber,
+                localDirectory,
+                remoteDirectory,
+                syncMode,
+            }, isDryRun));
+        let installWorker;
+        let uninstallWorker;
+        const installed = [];
+        const uninstalled = [];
+        const hasDeployedPowerOnFiles = isPowerOnDirectory &&
+            deployed.length > 0 &&
+            deployed.some((item) => installPowerOnList.includes(item));
+        const hasDeletedPowerOnFiles = isPowerOnDirectory &&
+            deleted.length > 0 &&
+            deleted.some((item) => installPowerOnList.includes(item));
+        if (!isDryRun && (hasDeployedPowerOnFiles || hasDeletedPowerOnFiles)) {
+            logger.info(`${logPrefix} Initializing PowerOn install worker for Sym ${symitarConfig.symNumber}`);
+            installWorker = await createInstallWorker();
+            uninstallWorker = await createUninstallWorker();
+        }
+        else if (hasDeployedPowerOnFiles || hasDeletedPowerOnFiles) {
+            logger.info(`${logPrefix} Would initialize PowerOn install worker for Sym ${symitarConfig.symNumber} (Dry Run)`);
+        }
+        if (hasDeployedPowerOnFiles) {
+            const installPowerOnFiles = deployed.filter((item) => installPowerOnList.includes(item));
+            logger.info(`${logPrefix} Found PowerOn files to install: ${installPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
+            for (const poweron of installPowerOnFiles) {
+                if (!isDryRun) {
+                    await installWorker.installPowerOn(`${localDirectory}${poweron}`);
+                    installed.push(poweron);
+                }
+                else {
+                    logger.info(`${logPrefix} Would install PowerOn: ${poweron} (Dry Run)`);
+                }
+            }
+        }
+        if (hasDeletedPowerOnFiles) {
+            const uninstallPowerOnFiles = deleted.filter((item) => installPowerOnList.includes(item));
+            logger.info(`${logPrefix} Found PowerOn files to uninstall: ${uninstallPowerOnFiles.join(', ')} ${isDryRun ? '(Dry Run)' : ''}`);
+            for (const poweron of uninstallPowerOnFiles) {
+                if (!isDryRun) {
+                    try {
+                        await uninstallWorker.uninstallPowerOn(poweron);
+                        uninstalled.push(poweron);
+                    }
+                    catch (error) {
+                        if (error.message.includes('No such file')) {
+                            logger.info(`${logPrefix} Skipping uninstall of PowerOn (not currently installed): ${poweron}`);
+                        }
+                        else {
+                            throw error;
+                        }
+                    }
+                }
+                else {
+                    logger.info(`${logPrefix} Would uninstall PowerOn: ${poweron} (Dry Run)`);
+                }
+            }
+        }
+        logger.info(`${logPrefix} Synchronized ${remoteDirectory} files: ${deployed.length} deployed, ${deleted.length} deleted ${isDryRun ? '(Dry Run)' : ''}`);
+        return {
+            deleted,
+            deployed,
+            installed,
+            uninstalled,
+        };
+    }
+    catch (error) {
+        logger.error(`[SymitarSSH] Unable to synchronize ${remoteDirectory} files: ${error.message}`);
+        throw error;
+    }
+};
+exports.synchronizeFiles = synchronizeFiles;
+//# sourceMappingURL=ssh.synchronize.js.map
+
+/***/ }),
+
+/***/ 70494:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5146,8 +6026,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHTransferFile = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
-const ssh_worker_1 = __nccwpck_require__(39686);
-const helpers_1 = __nccwpck_require__(92445);
+const ssh_worker_1 = __nccwpck_require__(35423);
+const helpers_1 = __nccwpck_require__(68400);
 class SymitarSSHTransferFile extends ssh_worker_1.SymitarSSHWorker {
     get logPrefix() {
         return `[SymitarSSHTransferFile]`;
@@ -5211,7 +6091,40 @@ exports.SymitarSSHTransferFile = SymitarSSHTransferFile;
 
 /***/ }),
 
-/***/ 58786:
+/***/ 57943:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SymitarSSHUninstallPowerOn = void 0;
+const types_1 = __nccwpck_require__(91756);
+const ssh_worker_1 = __nccwpck_require__(35423);
+const rxjs_1 = __nccwpck_require__(17828);
+class SymitarSSHUninstallPowerOn extends ssh_worker_1.SymitarSSHWorker {
+    get logPrefix() {
+        return `[SymitarSSHUninstallPowerOn]`;
+    }
+    handleData(data) {
+        if (data.includes(types_1.SymitarCLIUninstallPrompts.INSTALLED_POWERON_FILE_NAME)) {
+            this.logger.debug(`${this.logPrefix} Matched Uninstall worker ready prompt`);
+            this.setState('ready');
+        }
+    }
+    async uninstallPowerOn(powerOnName) {
+        await this.isReady();
+        this.logger.info(`${this.logPrefix} Uninstalling PowerOn: ${powerOnName}`);
+        this.setState('executing');
+        this.send([`${powerOnName}\r`, 'y\r']);
+        await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.filter)((d) => [`:_`].some((t) => d.toString().includes(t))), (0, rxjs_1.take)(1)));
+    }
+}
+exports.SymitarSSHUninstallPowerOn = SymitarSSHUninstallPowerOn;
+//# sourceMappingURL=ssh.uninstall.js.map
+
+/***/ }),
+
+/***/ 32383:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5257,13 +6170,34 @@ exports.SymitarSSHValidatePowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
 const rxjs_1 = __nccwpck_require__(17828);
-const ssh_worker_1 = __nccwpck_require__(39686);
-const constants_1 = __nccwpck_require__(82133);
-const helpers_1 = __nccwpck_require__(92445);
-const types_1 = __nccwpck_require__(24709);
+const ssh_worker_1 = __nccwpck_require__(35423);
+const constants_1 = __nccwpck_require__(93820);
+const helpers_1 = __nccwpck_require__(68400);
+const types_1 = __nccwpck_require__(91756);
 class SymitarSSHValidatePowerOn extends ssh_worker_1.SymitarSSHWorker {
+    _sftp = null;
     get logPrefix() {
         return `[SymitarSSHValidatePowerOn]`;
+    }
+    async getSftp() {
+        if (this._sftp)
+            return this._sftp;
+        return new Promise((resolve, reject) => {
+            this.client.sftp((err, sftp) => {
+                if (err)
+                    return reject(err);
+                this._sftp = sftp;
+                this.logger.debug(`${this.logPrefix} SFTP channel opened`);
+                resolve(sftp);
+            });
+        });
+    }
+    end() {
+        if (this._sftp) {
+            this._sftp.end();
+            this.logger.debug(`${this.logPrefix} SFTP channel closed`);
+        }
+        super.end();
     }
     handleData(data) {
         if (data.includes(types_1.SymitarCLIValidatePrompts.POWERON_FILE_NAME)) {
@@ -5273,66 +6207,75 @@ class SymitarSSHValidatePowerOn extends ssh_worker_1.SymitarSSHWorker {
     }
     async validatePowerOn(localFilePath, isOffline = true) {
         await this.isReady();
-        return new Promise((resolve, reject) => {
-            this.client.sftp((sftpError, sftp) => {
-                if (sftpError)
-                    return reject(sftpError);
-                const powerOnName = path_1.default.basename(localFilePath);
-                const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
-                const remoteFilePath = `/SYM/SYM${(0, helpers_1.paddedSymNumber)(this.config.symNumber)}/REPWRITERSPECS/${fileName}`;
-                this.logger.info(`${this.logPrefix} Validating PowerOn: ${powerOnName}`);
-                if (isOffline) {
-                    this.logger.info(`${this.logPrefix} Uploading mock PowerOn (${fileName}) in Sym ${this.config.symNumber} for validation`);
-                }
-                else {
-                    this.logger.info(`${this.logPrefix} Uploading PowerOn (${fileName}) to Sym ${this.config.symNumber}`);
-                }
-                fs.readFile(localFilePath, 'utf8', (readErr, data) => {
-                    if (readErr)
-                        return reject(readErr);
-                    const lfData = data.replace(/\r\n/g, '\n');
-                    sftp.writeFile(remoteFilePath, Buffer.from(lfData, 'utf8'), async (putError) => {
-                        if (putError)
-                            return reject(putError);
-                        this.setState('executing');
-                        this.send([`${fileName}\r`]);
-                        const result = await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.tap)((d) => {
-                            if (d.includes(types_1.SymitarCLIValidatePrompts.FILE_DOES_NOT_EXIST)) {
-                                this.send([constants_1.ESC, '7\r']);
-                            }
-                            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_SUCH_FILE_OR_DIRECTORY)) {
-                                this.send([constants_1.ESC]);
-                            }
-                        }), (0, rxjs_1.filter)((d) => [
-                            types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND,
-                            types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE,
-                        ].some((t) => d.includes(t))), (0, rxjs_1.tap)((d) => {
-                            if (d.includes(types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE)) {
-                                this.send(['n\r', '7\r']);
-                            }
-                            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND)) {
-                                this.send(['\r', '7\r']);
-                            }
-                        }), (0, rxjs_1.take)(1)));
-                        const match = result.match(constants_1.CLI_VALIDATE_PATTERN);
-                        const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
-                        if (isOffline) {
-                            sftp.unlink(remoteFilePath, (err) => {
-                                if (err) {
-                                    reject(err);
-                                }
-                                else {
-                                    resolve({ isValid, errors });
-                                }
-                            });
-                        }
-                        else {
-                            resolve({ isValid, errors });
-                        }
-                    });
-                });
+        const sftp = await this.getSftp();
+        const powerOnName = path_1.default.basename(localFilePath);
+        const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
+        const remoteFilePath = `/SYM/SYM${(0, helpers_1.paddedSymNumber)(this.config.symNumber)}/REPWRITERSPECS/${fileName}`;
+        this.logger.info(`${this.logPrefix} Validating PowerOn: ${powerOnName}`);
+        if (isOffline) {
+            this.logger.info(`${this.logPrefix} Uploading mock PowerOn (${fileName}) in Sym ${this.config.symNumber} for validation`);
+        }
+        else {
+            this.logger.info(`${this.logPrefix} Uploading PowerOn (${fileName}) to Sym ${this.config.symNumber}`);
+        }
+        const data = await fs.promises.readFile(localFilePath, 'utf8');
+        const lfData = data.replace(/\r\n/g, '\n');
+        await new Promise((resolve, reject) => {
+            sftp.writeFile(remoteFilePath, Buffer.from(lfData, 'utf8'), (err) => {
+                if (err)
+                    reject(err);
+                else
+                    resolve();
             });
         });
+        this.setState('executing');
+        this.send([`${fileName}\r`]);
+        this.logger.info(`${this.logPrefix} Waiting for validation response...`);
+        let lastReceivedData = '';
+        const result = await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.tap)((d) => {
+            lastReceivedData = d;
+            if (d.includes(types_1.SymitarCLIValidatePrompts.FILE_DOES_NOT_EXIST)) {
+                this.send([constants_1.ESC, '7\r']);
+            }
+            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_SUCH_FILE_OR_DIRECTORY)) {
+                this.send([constants_1.ESC]);
+            }
+        }), (0, rxjs_1.filter)((d) => [
+            types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND,
+            types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE,
+        ].some((t) => d.includes(t))), (0, rxjs_1.tap)((d) => {
+            if (d.includes(types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE)) {
+                this.send(['n\r', '7\r']);
+            }
+            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND)) {
+                this.send(['\r', '7\r']);
+            }
+        }), (0, rxjs_1.timeout)({
+            each: 60000,
+            with: () => {
+                const lastData = lastReceivedData
+                    ? lastReceivedData.substring(0, 200)
+                    : '(no data received)';
+                throw new Error(`${this.logPrefix} Validation timed out after 60s for ${powerOnName} ` +
+                    `(remote: ${remoteFilePath}). Last received data: ${lastData}`);
+            },
+        }), (0, rxjs_1.take)(1)));
+        this.logger.info(`${this.logPrefix} CLI response: ${result?.substring(0, 500)}`);
+        const match = result.match(constants_1.CLI_VALIDATE_PATTERN);
+        this.logger.info(`${this.logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
+        const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
+        this.logger.info(`${this.logPrefix} Final result: isValid=${isValid}, errors=${errors}`);
+        if (isOffline) {
+            await new Promise((resolve, reject) => {
+                sftp.unlink(remoteFilePath, (err) => {
+                    if (err)
+                        reject(err);
+                    else
+                        resolve();
+                });
+            });
+        }
+        return { isValid, errors };
     }
 }
 exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
@@ -5340,7 +6283,7 @@ exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
 
 /***/ }),
 
-/***/ 39686:
+/***/ 35423:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -5348,9 +6291,10 @@ exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHWorker = void 0;
 const rxjs_1 = __nccwpck_require__(17828);
-const constants_1 = __nccwpck_require__(82133);
-const types_1 = __nccwpck_require__(24709);
-const errors_1 = __nccwpck_require__(9777);
+const constants_1 = __nccwpck_require__(93820);
+const types_1 = __nccwpck_require__(91756);
+const errors_1 = __nccwpck_require__(49322);
+const logging_1 = __nccwpck_require__(58924);
 class SymitarSSHWorker {
     client;
     channel;
@@ -5361,6 +6305,7 @@ class SymitarSSHWorker {
     _data$ = new rxjs_1.BehaviorSubject('');
     _error$ = new rxjs_1.BehaviorSubject(null);
     _state$ = new rxjs_1.BehaviorSubject('initializing');
+    _lastReceivedData = '';
     get logPrefix() {
         return `[SymitarSSHWorker]`;
     }
@@ -5385,7 +6330,8 @@ class SymitarSSHWorker {
         this.channel = channel;
         if ([
             types_1.SymitarWorkerType.INSTALL_POWERON,
-            types_1.SymitarWorkerType.RUN_POWERON,
+            types_1.SymitarWorkerType.UNINSTALL_POWERON,
+            types_1.SymitarWorkerType.EXECUTE_POWERON,
             types_1.SymitarWorkerType.VALIDATE_POWERON,
         ].includes(type)) {
             this.setupCLI();
@@ -5408,8 +6354,9 @@ class SymitarSSHWorker {
         const symSelections = {};
         this.channel.on('data', (data) => {
             const d = data.toString().replace(constants_1.CLI_NON_ASCI_PATTERN, '~');
-            this.logger.debug(`${this.logPrefix} Data :: ${d}`);
+            this.logger.debug(`${this.logPrefix} Data :: ${(0, logging_1.sanitizeForLogging)(d)}`);
             this.logger.debug(`${this.logPrefix} Data :: Length: ${d.length}`);
+            this._lastReceivedData = d;
             if (d.includes(types_1.SymitarCLILogin.MENU_SELECTION)) {
                 if (!loginMap.get(types_1.SymitarCLILogin.MENU_SELECTION)) {
                     this.logger.info(`${this.logPrefix} Executing initial commands from Main Menu`);
@@ -5445,7 +6392,9 @@ class SymitarSSHWorker {
                     loginMap.set(types_1.SymitarCLILogin.TO_BE_PROCESSED, true);
                 }
             }
-            else if (d.includes(types_1.SymitarCLILogin.AIX_SHELL) && d.length === 2) {
+            else if ((d.includes(types_1.SymitarCLILogin.AIX_SHELL) ||
+                d.includes(types_1.SymitarCLILogin.AIX_SHELL_ROOT)) &&
+                d.length === 2) {
                 if (!loginMap.get(types_1.SymitarCLILogin.AIX_SHELL)) {
                     this.logger.info(`${this.logPrefix} Multi-Sym detected, entering Sym: ${this.config.symNumber}`);
                     this.send([`sym ${this.config.symNumber}\r`]);
@@ -5541,14 +6490,29 @@ class SymitarSSHWorker {
             this.setState('ready');
         }
     }
-    async isReady(timeoutInMS = 5000) {
+    async isReady(timeoutInMS = 30000) {
         this.logger.debug(`${this.logPrefix} Waiting for worker to be ready...`);
-        await (0, rxjs_1.firstValueFrom)(this.state$.pipe((0, rxjs_1.startWith)(this._state$.value), (0, rxjs_1.tap)((state) => {
-            if (state === 'error') {
-                this.logger.error(`${this.logPrefix} Worker is in error state`);
-                throw new Error(this.currentError || 'An unknown error occurred');
-            }
-        }), (0, rxjs_1.filter)((state) => state === 'ready'), (0, rxjs_1.timeout)(timeoutInMS)));
+        try {
+            await (0, rxjs_1.firstValueFrom)(this.state$.pipe((0, rxjs_1.startWith)(this._state$.value), (0, rxjs_1.tap)((state) => {
+                if (state === 'error') {
+                    this.logger.error(`${this.logPrefix} Worker is in error state`);
+                    throw new Error(this.currentError || 'An unknown error occurred');
+                }
+            }), (0, rxjs_1.filter)((state) => state === 'ready'), (0, rxjs_1.timeout)({
+                each: timeoutInMS,
+                with: () => {
+                    const lastData = this._lastReceivedData
+                        ? (0, logging_1.sanitizeForLogging)(this._lastReceivedData.substring(0, 200))
+                        : '(no data received)';
+                    throw new Error(`${this.logPrefix} Timed out after ${timeoutInMS / 1000}s waiting for worker to reach ready state. ` +
+                        `Current state: ${this.currentState}. Last received data: ${lastData}`);
+                },
+            })));
+        }
+        catch (error) {
+            this.logger.error(`${this.logPrefix} Worker failed to reach ready state: ${error.message}`);
+            throw error;
+        }
         this.logger.debug(`${this.logPrefix} Worker is ready`);
     }
     send(commands) {
@@ -5565,7 +6529,7 @@ exports.SymitarSSHWorker = SymitarSSHWorker;
 
 /***/ }),
 
-/***/ 34502:
+/***/ 63993:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5574,146 +6538,187 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SymitarWS = void 0;
+exports.SymitarWS = exports.SymitarWSWorkArea = exports.SymitarWSState = exports.SymitarWSPatterns = void 0;
 const os_1 = __importDefault(__nccwpck_require__(70857));
 const ws_1 = __importDefault(__nccwpck_require__(33449));
-const constants_1 = __nccwpck_require__(82133);
-var SymitarState;
-(function (SymitarState) {
-    SymitarState[SymitarState["LOGIN_PROMPT"] = 0] = "LOGIN_PROMPT";
-    SymitarState[SymitarState["SENT_USERNAME"] = 1] = "SENT_USERNAME";
-    SymitarState[SymitarState["SENT_PASSWORD"] = 2] = "SENT_PASSWORD";
-    SymitarState[SymitarState["SENT_WINDOWS_LEVEL"] = 3] = "SENT_WINDOWS_LEVEL";
-    SymitarState[SymitarState["SENT_WINHOST_SYNC"] = 4] = "SENT_WINHOST_SYNC";
-    SymitarState[SymitarState["SENT_SYMITAR_ID"] = 5] = "SENT_SYMITAR_ID";
-    SymitarState[SymitarState["SYMITAR_READY"] = 6] = "SYMITAR_READY";
-})(SymitarState || (SymitarState = {}));
-var SymitarWorkArea;
-(function (SymitarWorkArea) {
-    SymitarWorkArea["SIGNONMESSAGE"] = "";
-    SymitarWorkArea["POWERON_CONTROL"] = "mm3\u001B";
-    SymitarWorkArea["PRINT_CONTROL"] = "MM1\u001B";
-})(SymitarWorkArea || (SymitarWorkArea = {}));
+const winston_1 = __importDefault(__nccwpck_require__(68360));
+const helpers_1 = __nccwpck_require__(68400);
+const constants_1 = __nccwpck_require__(93820);
+const logging_1 = __nccwpck_require__(58924);
+const rxjs_1 = __nccwpck_require__(17828);
+exports.SymitarWSPatterns = {
+    SYM_LOGIN_PROMPT: /login as:/,
+    SYM_PASSWORD_PROMPT: /'s Password:/,
+    SYM_WINLEVEL_PROMPT: /\[c/,
+    SYM_WINSYNC_PROMPT: /Input~HelpCode=10025/,
+    SYM_USERID_PROMPT: /Input~HelpCode=10002/,
+    SYM_DOWNLOADSYNC_PROMPT: /SymDownloadSync~Global/,
+    SYM_SESSION_INFORMATION: /(?=.*ConnectionId)(?=.*SessionId)/,
+    SYM_USER: /SymLogonUserLoggedIn/,
+};
+var SymitarWSState;
+(function (SymitarWSState) {
+    SymitarWSState[SymitarWSState["LOGIN_PROMPT"] = 0] = "LOGIN_PROMPT";
+    SymitarWSState[SymitarWSState["SENT_USERNAME"] = 1] = "SENT_USERNAME";
+    SymitarWSState[SymitarWSState["SENT_PASSWORD"] = 2] = "SENT_PASSWORD";
+    SymitarWSState[SymitarWSState["SENT_WINDOWS_LEVEL"] = 3] = "SENT_WINDOWS_LEVEL";
+    SymitarWSState[SymitarWSState["SENT_WINHOST_SYNC"] = 4] = "SENT_WINHOST_SYNC";
+    SymitarWSState[SymitarWSState["SENT_SYMITAR_ID"] = 5] = "SENT_SYMITAR_ID";
+    SymitarWSState[SymitarWSState["NEEDS_SESSION_INFO"] = 6] = "NEEDS_SESSION_INFO";
+    SymitarWSState[SymitarWSState["SYMITAR_EXECUTING"] = 7] = "SYMITAR_EXECUTING";
+    SymitarWSState[SymitarWSState["SYMITAR_READY"] = 8] = "SYMITAR_READY";
+    SymitarWSState[SymitarWSState["SYMITAR_NAVIGATING"] = 9] = "SYMITAR_NAVIGATING";
+    SymitarWSState[SymitarWSState["SYMITAR_ERROR"] = 10] = "SYMITAR_ERROR";
+})(SymitarWSState || (exports.SymitarWSState = SymitarWSState = {}));
+var SymitarWSWorkArea;
+(function (SymitarWSWorkArea) {
+    SymitarWSWorkArea["SIGNONMESSAGE"] = "";
+    SymitarWSWorkArea["ACCOUNT_MANAGER"] = "m1\u001B";
+    SymitarWSWorkArea["POWERON_CONTROL"] = "mm3\u001B";
+    SymitarWSWorkArea["PRINT_CONTROL"] = "MM1\u001B";
+})(SymitarWSWorkArea || (exports.SymitarWSWorkArea = SymitarWSWorkArea = {}));
 class SymitarWS {
-    _symNumber;
-    _host;
-    _port;
-    _username;
-    _password;
-    _symitarId;
     _ws;
     _sessionInfo = {};
     _msgId = 1000000;
+    _logPrefix = '[SymitarWS]';
+    _logger;
     _loginHost = 'anonymousvm';
     _loginHostIP = os_1.default.networkInterfaces().en0?.[0].address || '';
+    _error$ = new rxjs_1.BehaviorSubject(null);
+    _state$ = new rxjs_1.BehaviorSubject(SymitarWSState.LOGIN_PROMPT);
+    _workArea$ = new rxjs_1.BehaviorSubject(null);
     get _nextMsgId() {
         return (this._msgId++).toString();
     }
-    state = SymitarState.LOGIN_PROMPT;
-    workArea = null;
-    constructor(_symNumber, _host, _port, _username, _password, _symitarId) {
-        this._symNumber = _symNumber;
-        this._host = _host;
-        this._port = _port;
-        this._username = _username;
-        this._password = _password;
-        this._symitarId = _symitarId;
-        const headers = {
-            CONNECTIONTYPE: '5',
-            DOMAIN: '',
-            INSTITUTIONID: 'SYMITAR',
-            ISEXPERIENCE: 'False',
-            ISHOSTDOWNLOAD: 'False',
-            ISVIRTUAL: 'False',
-            PORT: '-1',
-            PROFILE: 'TEST',
-            SERVER: this._host,
-            SYMNUMBER: this._symNumber,
-            LOGINHOST: this._loginHost,
-            LOGINHOSTIP: this._loginHostIP,
-        };
-        this._ws = new ws_1.default(`wss://${this._host}:${this._port}/quest`, {
-            headers,
+    get _currentState() {
+        return this._state$.value;
+    }
+    get _currentError() {
+        return this._error$.value;
+    }
+    host;
+    config;
+    get state$() {
+        return this._state$.asObservable();
+    }
+    get workArea$() {
+        return this._workArea$.asObservable();
+    }
+    constructor(baseUrl, config, logLevel = 'info') {
+        this.config = config;
+        this.host = new URL(baseUrl).hostname;
+        this._logger = winston_1.default.createLogger({
+            level: logLevel,
+            format: winston_1.default.format.combine(winston_1.default.format.colorize(), winston_1.default.format.printf(({ message }) => `${message}`)),
+            transports: [new winston_1.default.transports.Console()],
+        });
+        if (!this.config.aixUsername || !this.config.aixPassword) {
+            this._logger.error(`${this._logPrefix} AIX username and password are required`);
+            throw new Error('AIX username and password are required');
+        }
+        this._ws = new ws_1.default(`${baseUrl}/quest`, {
+            headers: {
+                CONNECTIONTYPE: '5',
+                DOMAIN: '',
+                INSTITUTIONID: 'SYMITAR',
+                ISEXPERIENCE: 'False',
+                ISHOSTDOWNLOAD: 'False',
+                ISVIRTUAL: 'False',
+                PORT: '-1',
+                PROFILE: 'TEST',
+                SERVER: this.host,
+                SYMNUMBER: (0, helpers_1.paddedSymNumber)(this.config.symNumber),
+                LOGINHOST: this._loginHost,
+                LOGINHOSTIP: this._loginHostIP,
+            },
             rejectUnauthorized: false,
         });
         this._ws.on('open', () => {
-            console.log(`Connected to Symitar at wss://${_host}:${_port}/quest`);
+            this._logger.info(`${this._logPrefix} Connected to Symitar at wss://${baseUrl}/quest`);
         });
         this._ws.on('message', (data) => {
             const message = data.toString();
-            console.log(`< ${message}`);
-            this._handleMessage(message);
+            this._logger.debug(`${this._logPrefix} < ${(0, logging_1.sanitizeForLogging)(message)}`);
+            if (this._currentState <= SymitarWSState.NEEDS_SESSION_INFO) {
+                this._handleLoginPrompts(message);
+            }
         });
         this._ws.on('error', (error) => {
-            console.error(error.message);
+            this._logger.error(`${this._logPrefix} WebSocket error: ${error.message}`);
         });
     }
-    _handleMessage(data) {
+    _handleLoginPrompts(data) {
         if (typeof data !== 'string')
             return;
-        if (this.state === SymitarState.SYMITAR_READY) {
-            if (data.includes('ConnectionId') && data.includes('SessionId')) {
-                const match = data.match(constants_1.MESSAGE_BLOCK);
-                if (match) {
-                    const pairs = match[1].split('~');
-                    for (const pair of pairs) {
-                        const [key, value] = pair.split('=');
-                        if (key && value !== undefined) {
-                            this._sessionInfo[key] = value;
-                        }
-                    }
+        switch (this._currentState) {
+            case SymitarWSState.LOGIN_PROMPT:
+                if (exports.SymitarWSPatterns.SYM_LOGIN_PROMPT.test(data)) {
+                    this._sendMessage(this.config.aixUsername, true, true);
+                    this._state$.next(SymitarWSState.SENT_USERNAME);
+                }
+                break;
+            case SymitarWSState.SENT_USERNAME:
+                if (exports.SymitarWSPatterns.SYM_PASSWORD_PROMPT.test(data)) {
+                    this._sendMessage(this.config.aixPassword, true, true);
+                    this._state$.next(SymitarWSState.SENT_PASSWORD);
+                }
+                break;
+            case SymitarWSState.SENT_PASSWORD:
+                if (exports.SymitarWSPatterns.SYM_WINLEVEL_PROMPT.test(data)) {
+                    this._sendMessage(`WINDOWSLEVEL=3 LOGINHOST=${this._loginHost}`, false);
+                    this._state$.next(SymitarWSState.SENT_WINDOWS_LEVEL);
+                }
+                break;
+            case SymitarWSState.SENT_WINDOWS_LEVEL:
+                if (exports.SymitarWSPatterns.SYM_WINSYNC_PROMPT.test(data)) {
+                    this._sendMessage('$WinHostSync$');
+                    this._state$.next(SymitarWSState.SENT_WINHOST_SYNC);
+                }
+                break;
+            case SymitarWSState.SENT_WINHOST_SYNC:
+                if (exports.SymitarWSPatterns.SYM_USERID_PROMPT.test(data)) {
+                    this._sendMessage(`${this.config.symitarUserNumber}.${this.config.symitarUserPassword}`);
+                    this._state$.next(SymitarWSState.SENT_SYMITAR_ID);
+                }
+                break;
+            case SymitarWSState.SENT_SYMITAR_ID:
+                if (exports.SymitarWSPatterns.SYM_DOWNLOADSYNC_PROMPT.test(data)) {
+                    this._sendMessage(`SymitarUsernamePassword=${this.config.symitarUserNumber}.${this.config.symitarUserPassword}`);
                     this._sendMessage('');
-                    this.workArea = SymitarWorkArea.SIGNONMESSAGE;
+                    this._state$.next(SymitarWSState.NEEDS_SESSION_INFO);
                 }
-            }
-            if (data.includes('SymLogonUserLoggedIn')) {
-                const pair = data
-                    .split('~')
-                    .find((pair) => pair.startsWith('UserName='));
-                if (pair) {
-                    const [, value] = pair.split('=');
-                    this._sessionInfo['UserName'] = value;
+                break;
+            case SymitarWSState.NEEDS_SESSION_INFO:
+                if (exports.SymitarWSPatterns.SYM_USER.test(data)) {
+                    const pair = data
+                        .split('~')
+                        .find((pair) => pair.startsWith('UserName='));
+                    if (pair) {
+                        const [, value] = pair.split('=');
+                        this._sessionInfo['UserName'] = value;
+                    }
                 }
-            }
+                if (exports.SymitarWSPatterns.SYM_SESSION_INFORMATION.test(data)) {
+                    const messageBlock = data.match(constants_1.MESSAGE_BLOCK);
+                    if (messageBlock) {
+                        const pairs = messageBlock[1].split('~');
+                        for (const pair of pairs) {
+                            const [key, value] = pair.split('=');
+                            if (key && value !== undefined) {
+                                this._sessionInfo[key] = value;
+                            }
+                        }
+                        this._sendMessage('');
+                        this._state$.next(SymitarWSState.SYMITAR_READY);
+                        this._workArea$.next(SymitarWSWorkArea.SIGNONMESSAGE);
+                    }
+                }
+                break;
         }
-        else {
-            if (this.state === SymitarState.LOGIN_PROMPT &&
-                data.includes('login as:')) {
-                this._sendMessage(this._username, true, true);
-                this.state = SymitarState.SENT_USERNAME;
-            }
-            else if (this.state === SymitarState.SENT_USERNAME &&
-                data.includes("'s Password:")) {
-                this._sendMessage(this._password, true, true);
-                this.state = SymitarState.SENT_PASSWORD;
-            }
-            else if (this.state === SymitarState.SENT_PASSWORD &&
-                data.includes('[c')) {
-                this._sendMessage(`WINDOWSLEVEL=3 LOGINHOST=${this._loginHost}`, false);
-                this.state = SymitarState.SENT_WINDOWS_LEVEL;
-            }
-            else if (this.state === SymitarState.SENT_WINDOWS_LEVEL &&
-                data.includes('Input~HelpCode=10025')) {
-                this._sendMessage('$WinHostSync$');
-                this.state = SymitarState.SENT_WINHOST_SYNC;
-            }
-            else if (this.state === SymitarState.SENT_WINHOST_SYNC &&
-                data.includes('Input~HelpCode=10002')) {
-                this._sendMessage(this._symitarId);
-                this.state = SymitarState.SENT_SYMITAR_ID;
-            }
-            else if (this.state === SymitarState.SENT_SYMITAR_ID &&
-                data.includes('SymDownloadSync~Global')) {
-                this._sendMessage(`SymitarUsernamePassword=${this._symitarId}`);
-                this._sendMessage('');
-                this.state = SymitarState.SYMITAR_READY;
-            }
-        }
-    }
-    _sendCommand() {
     }
     _sendMessage(message, includeCR = true, includeNewline = false) {
-        console.warn(`> ${message}`);
+        this._logger.debug(`${this._logPrefix} > ${(0, logging_1.sanitizeForLogging)(message)}`);
         const buffer = Buffer.from(message + `${includeCR ? '\r' : ''}${includeNewline ? '\n' : ''}`, 'ascii');
         this._ws.send(buffer);
     }
@@ -5734,18 +6739,20 @@ class SymitarWS {
             this._ws.on('message', handler);
         });
     }
-    dispose() {
+    async isReady(timeoutInMS = 10000) {
+        this._logger.debug(`${this._logPrefix} Waiting for Symitar to be ready...`);
+        await (0, rxjs_1.firstValueFrom)(this.state$.pipe((0, rxjs_1.startWith)(this._state$.value), (0, rxjs_1.tap)((state) => {
+            if (state === SymitarWSState.SYMITAR_ERROR) {
+                this._logger.error(`${this._logPrefix} Symitar is in an error state`);
+                throw new Error(this._currentError || 'An unknown Symitar error occurred');
+            }
+        }), (0, rxjs_1.filter)((state) => state === SymitarWSState.SYMITAR_READY), (0, rxjs_1.timeout)(timeoutInMS)));
+        this._logger.debug(`${this._logPrefix} Symitar is ready`);
+    }
+    end() {
         const buffer = Buffer.from(`l${constants_1.ESC}`, 'ascii');
         this._ws.send(buffer);
         this._ws.close();
-    }
-    async validatePowerOn(poweronName) {
-        this._sendMessage(SymitarWorkArea.POWERON_CONTROL);
-        await this._waitForMessage((msg) => msg.includes('WorkArea~Name=PowerOn'));
-        this._sendMessage('7');
-        await this._waitForMessage((msg) => msg.includes('FileControl~Continue=1'));
-        this._sendMessage(poweronName);
-        await this._waitForMessage((msg) => msg.includes('SpecfileErr~Action='));
     }
 }
 exports.SymitarWS = SymitarWS;
@@ -5753,7 +6760,7 @@ exports.SymitarWS = SymitarWS;
 
 /***/ }),
 
-/***/ 62220:
+/***/ 75947:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5773,25 +6780,45 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SymitarWorkerType = exports.SymitarAppServerFileType = void 0;
-__exportStar(__nccwpck_require__(25812), exports);
-__exportStar(__nccwpck_require__(45728), exports);
-__exportStar(__nccwpck_require__(34502), exports);
-var types_1 = __nccwpck_require__(24709);
+exports.SymitarWorkerType = exports.SymitarSyncMode = exports.SymitarSyncDirectory = exports.SymitarDirectory = exports.SymitarAppServerFileType = exports.BatchQueueSelection = exports.getSkipReasonForFile = exports.getSkipReason = exports.shouldValidatePowerOnFile = exports.shouldValidatePowerOn = exports.shouldValidatePowerOnByExtension = exports.isValidPowerOnSpecfile = exports.hasPrintDivision = exports.hasTargetDivision = exports.getFirstWord = exports.removeBlockComments = exports.isPowerOnFile = exports.POWERON_PRINT_TITLE_PATTERN = exports.POWERON_TARGET_PATTERN = exports.EXTENSIONS_TO_SKIP_VALIDATION = exports.POWERON_EXTENSIONS = void 0;
+__exportStar(__nccwpck_require__(63591), exports);
+__exportStar(__nccwpck_require__(14339), exports);
+__exportStar(__nccwpck_require__(63993), exports);
+var poweron_detection_1 = __nccwpck_require__(64371);
+Object.defineProperty(exports, "POWERON_EXTENSIONS", ({ enumerable: true, get: function () { return poweron_detection_1.POWERON_EXTENSIONS; } }));
+Object.defineProperty(exports, "EXTENSIONS_TO_SKIP_VALIDATION", ({ enumerable: true, get: function () { return poweron_detection_1.EXTENSIONS_TO_SKIP_VALIDATION; } }));
+Object.defineProperty(exports, "POWERON_TARGET_PATTERN", ({ enumerable: true, get: function () { return poweron_detection_1.POWERON_TARGET_PATTERN; } }));
+Object.defineProperty(exports, "POWERON_PRINT_TITLE_PATTERN", ({ enumerable: true, get: function () { return poweron_detection_1.POWERON_PRINT_TITLE_PATTERN; } }));
+Object.defineProperty(exports, "isPowerOnFile", ({ enumerable: true, get: function () { return poweron_detection_1.isPowerOnFile; } }));
+Object.defineProperty(exports, "removeBlockComments", ({ enumerable: true, get: function () { return poweron_detection_1.removeBlockComments; } }));
+Object.defineProperty(exports, "getFirstWord", ({ enumerable: true, get: function () { return poweron_detection_1.getFirstWord; } }));
+Object.defineProperty(exports, "hasTargetDivision", ({ enumerable: true, get: function () { return poweron_detection_1.hasTargetDivision; } }));
+Object.defineProperty(exports, "hasPrintDivision", ({ enumerable: true, get: function () { return poweron_detection_1.hasPrintDivision; } }));
+Object.defineProperty(exports, "isValidPowerOnSpecfile", ({ enumerable: true, get: function () { return poweron_detection_1.isValidPowerOnSpecfile; } }));
+Object.defineProperty(exports, "shouldValidatePowerOnByExtension", ({ enumerable: true, get: function () { return poweron_detection_1.shouldValidatePowerOnByExtension; } }));
+Object.defineProperty(exports, "shouldValidatePowerOn", ({ enumerable: true, get: function () { return poweron_detection_1.shouldValidatePowerOn; } }));
+Object.defineProperty(exports, "shouldValidatePowerOnFile", ({ enumerable: true, get: function () { return poweron_detection_1.shouldValidatePowerOnFile; } }));
+Object.defineProperty(exports, "getSkipReason", ({ enumerable: true, get: function () { return poweron_detection_1.getSkipReason; } }));
+Object.defineProperty(exports, "getSkipReasonForFile", ({ enumerable: true, get: function () { return poweron_detection_1.getSkipReasonForFile; } }));
+var types_1 = __nccwpck_require__(91756);
+Object.defineProperty(exports, "BatchQueueSelection", ({ enumerable: true, get: function () { return types_1.BatchQueueSelection; } }));
 Object.defineProperty(exports, "SymitarAppServerFileType", ({ enumerable: true, get: function () { return types_1.SymitarAppServerFileType; } }));
+Object.defineProperty(exports, "SymitarDirectory", ({ enumerable: true, get: function () { return types_1.SymitarDirectory; } }));
+Object.defineProperty(exports, "SymitarSyncDirectory", ({ enumerable: true, get: function () { return types_1.SymitarSyncDirectory; } }));
+Object.defineProperty(exports, "SymitarSyncMode", ({ enumerable: true, get: function () { return types_1.SymitarSyncMode; } }));
 Object.defineProperty(exports, "SymitarWorkerType", ({ enumerable: true, get: function () { return types_1.SymitarWorkerType; } }));
 //# sourceMappingURL=index.js.map
 
 /***/ }),
 
-/***/ 82133:
+/***/ 93820:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MESSAGE_BLOCK = exports.CLI_VALIDATE_PATTERN = exports.CLI_SSH_WORKER_COMMANDS = exports.CLI_NON_ASCI_PATTERN = exports.CLI_EASE_PATTERN = exports.CLI_CONSOLE_PATTERN = exports.APP_SERVER_VALIDATE_PATTERN = exports.ESC = exports.SSHPASS_PATTERN = void 0;
-const types_1 = __nccwpck_require__(24709);
+const types_1 = __nccwpck_require__(91756);
 exports.SSHPASS_PATTERN = /sshpass -p ".*?"/;
 exports.ESC = '\u001b';
 exports.APP_SERVER_VALIDATE_PATTERN = /(Error in file)(\n|.)*?(Error: Specfile:)/gim;
@@ -5801,7 +6828,8 @@ exports.CLI_NON_ASCI_PATTERN = /[^\x20-\x7F]/g;
 exports.CLI_SSH_WORKER_COMMANDS = {
     [types_1.SymitarWorkerType.FETCH_REPORT]: [],
     [types_1.SymitarWorkerType.INSTALL_POWERON]: ['8\r', '3\r', '8\r'],
-    [types_1.SymitarWorkerType.RUN_POWERON]: [],
+    [types_1.SymitarWorkerType.UNINSTALL_POWERON]: ['8\r', '3\r', '10\r'],
+    [types_1.SymitarWorkerType.EXECUTE_POWERON]: ['8\r', '0\r', '1\r', '\r', '11\r'],
     [types_1.SymitarWorkerType.TRANSFER_FILE]: [],
     [types_1.SymitarWorkerType.VALIDATE_POWERON]: ['8\r', '3\r', '7\r'],
 };
@@ -5811,7 +6839,7 @@ exports.MESSAGE_BLOCK = /@begin~(.*?)~@end/;
 
 /***/ }),
 
-/***/ 9777:
+/***/ 49322:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -5830,7 +6858,7 @@ exports.ERROR_MESSAGES = {
 
 /***/ }),
 
-/***/ 92445:
+/***/ 68400:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5869,13 +6897,14 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.paddedSymNumber = exports.handleKnownHosts = exports.convertToLinuxPath = exports.executePowerOnRsync = exports.executeRsyncCommand = exports.checkRsyncDependencies = exports.computeRemoteFileHash = exports.computeFileHash = exports.convertFileToBinary = exports.getMessageFromValidatePowerOn = exports.generateRandomPowerOnName = exports.buildValidationResult = void 0;
+exports.paddedSymNumber = exports.handleKnownHosts = exports.convertToLinuxPath = exports.executeRsync = exports.executeRsyncCommand = exports.checkRsyncDependencies = exports.computeRemoteFileHash = exports.computeFileHash = exports.convertFileToBinary = exports.getMessageFromValidatePowerOn = exports.generateRandomPowerOnName = exports.buildValidationResult = void 0;
 const fs = __importStar(__nccwpck_require__(79896));
 const crypto = __importStar(__nccwpck_require__(76982));
 const child_process_1 = __nccwpck_require__(35317);
 const util_1 = __nccwpck_require__(39023);
-const constants_1 = __nccwpck_require__(82133);
-const scripts_1 = __nccwpck_require__(16016);
+const constants_1 = __nccwpck_require__(93820);
+const types_1 = __nccwpck_require__(91756);
+const scripts_1 = __nccwpck_require__(20797);
 const execPromise = (0, util_1.promisify)(child_process_1.exec);
 const runBashScript = async (script, args = []) => {
     const isWindows = process.platform === 'win32';
@@ -5927,8 +6956,8 @@ const getMessageFromValidatePowerOn = (errors) => {
     return messageLines.reverse().join('\n');
 };
 exports.getMessageFromValidatePowerOn = getMessageFromValidatePowerOn;
-const convertFileToBinary = (filePath) => {
-    return Buffer.from(fs.readFileSync(filePath));
+const convertFileToBinary = async (filePath) => {
+    return fs.promises.readFile(filePath);
 };
 exports.convertFileToBinary = convertFileToBinary;
 const computeFileHash = async (filePath) => {
@@ -5973,123 +7002,116 @@ const checkRsyncDependencies = async () => {
     let isRsyncCompatible;
     let hasRsync;
     let hasSSHPass;
-    return new Promise(async (resolve, reject) => {
-        const isWindows = process.platform === 'win32';
-        if (isWindows) {
-            try {
-                const list = (await execPromise('wsl -l')).stdout;
-                isRsyncCompatible = list.includes(':') ? true : false;
-            }
-            catch {
-                reject(new Error('Missing WSL environment'));
-            }
-            try {
-                await execPromise('wsl -e which rsync');
-                hasRsync = true;
-            }
-            catch {
-                reject(new Error('Missing rsync in WSL environment'));
-            }
-            try {
-                await execPromise('wsl -e which sshpass');
-                hasSSHPass = true;
-            }
-            catch {
-                reject(new Error('Missing sshpass in WSL environment'));
-            }
+    const isWindows = process.platform === 'win32';
+    if (isWindows) {
+        try {
+            const list = (await execPromise('wsl -l')).stdout;
+            isRsyncCompatible = list.includes(':') ? true : false;
         }
-        else {
-            isRsyncCompatible = true;
-            try {
-                await execPromise('which rsync');
-                hasRsync = true;
-            }
-            catch {
-                reject(new Error('Missing rsync'));
-            }
-            try {
-                await execPromise('which sshpass');
-                hasSSHPass = true;
-            }
-            catch {
-                reject(new Error('Missing sshpass'));
-            }
+        catch {
+            throw new Error('Missing WSL environment');
         }
-        isRsyncCompatible && hasRsync && hasSSHPass
-            ? resolve()
-            : reject(new Error('Rsync dependencies are not met. Please ensure rsync and sshpass are installed.'));
-    });
+        try {
+            await execPromise('wsl -e which rsync');
+            hasRsync = true;
+        }
+        catch {
+            throw new Error('Missing rsync in WSL environment');
+        }
+        try {
+            await execPromise('wsl -e which sshpass');
+            hasSSHPass = true;
+        }
+        catch {
+            throw new Error('Missing sshpass in WSL environment');
+        }
+    }
+    else {
+        isRsyncCompatible = true;
+        try {
+            await execPromise('which rsync');
+            hasRsync = true;
+        }
+        catch {
+            throw new Error('Missing rsync');
+        }
+        try {
+            await execPromise('which sshpass');
+            hasSSHPass = true;
+        }
+        catch {
+            throw new Error('Missing sshpass');
+        }
+    }
+    if (!isRsyncCompatible || !hasRsync || !hasSSHPass) {
+        throw new Error('Rsync dependencies are not met. Please ensure rsync and sshpass are installed.');
+    }
 };
 exports.checkRsyncDependencies = checkRsyncDependencies;
 const executeRsyncCommand = async (command) => {
-    return new Promise(async (resolve, reject) => {
-        try {
-            const { stdout, stderr } = await execPromise(command);
-            if (stdout) {
-                resolve(stdout.replace(constants_1.SSHPASS_PATTERN, "sshpass -p '*****'"));
-            }
-            if (stderr) {
-                reject(new Error(stderr.replace(constants_1.SSHPASS_PATTERN, "sshpass -p '*****'")));
-            }
+    try {
+        const { stdout, stderr } = await execPromise(command);
+        if (stderr) {
+            throw new Error(stderr.replace(constants_1.SSHPASS_PATTERN, "sshpass -p '*****'"));
         }
-        catch (error) {
-            reject(new Error(`Failed to execute rsync command. ${error.message.replace(constants_1.SSHPASS_PATTERN, "sshpass -p '*****'")}`));
+        if (stdout) {
+            return stdout.replace(constants_1.SSHPASS_PATTERN, "sshpass -p '*****'");
         }
-    });
+        return '';
+    }
+    catch (error) {
+        throw new Error(`Failed to execute rsync command. ${error.message.replace(constants_1.SSHPASS_PATTERN, "sshpass -p '*****'")}`);
+    }
 };
 exports.executeRsyncCommand = executeRsyncCommand;
-const executePowerOnRsync = async (config, isDryRun = true) => {
-    const remotePowerOnDirectory = `${config.username}@${config.host}:/SYM/SYM${(0, exports.paddedSymNumber)(config.symNumber)}/REPWRITERSPECS/`;
-    return new Promise(async (resolve, reject) => {
-        try {
-            await (0, exports.checkRsyncDependencies)();
-            await (0, exports.handleKnownHosts)(config.host);
-        }
-        catch (error) {
-            reject(error);
-        }
-        const rsyncCommand = [
-            process.platform === 'win32'
-                ? `wsl -e sshpass -p "${config.password}"`
-                : `sshpass -p "${config.password}"`,
-            'rsync',
-            isDryRun ? '-rzvLn' : '-rzvL',
-            '--delete',
-            '--no-group',
-            '--no-perms',
-            '--itemize-changes',
-            '--out-format="%i %n"',
-            '--size-only',
-            '--chmod=ug=rwX,o=',
-            process.platform === 'win32'
-                ? (0, exports.convertToLinuxPath)(config.directory)
-                : config.directory,
-            `${remotePowerOnDirectory}`,
-        ].join(' ');
-        const changedPowerOns = {
-            deleted: [],
-            deployed: [],
-        };
-        const output = await (0, exports.executeRsyncCommand)(rsyncCommand);
-        const lines = output.split('\n').map((line) => line.trim());
-        for (const line of lines) {
-            if (line.startsWith('*deleting')) {
-                const filename = line.replace('*deleting', '').trim().split(' ').pop() || '';
-                if (filename !== '') {
-                    changedPowerOns.deleted.push(filename);
-                }
-            }
-            else if (line.startsWith('<f')) {
-                const filename = line.slice(10).trim().split(' ').pop() || '';
-                if (filename !== '') {
-                    changedPowerOns.deployed.push(filename);
-                }
+const executeRsync = async (config, isDryRun = true) => {
+    const syncMode = config.syncMode || types_1.SymitarSyncMode.MIRROR;
+    const remoteDirectory = `${config.username}@${config.host}:/SYM/SYM${(0, exports.paddedSymNumber)(config.symNumber)}/${config.remoteDirectory}/`;
+    const localDirectory = process.platform === 'win32'
+        ? (0, exports.convertToLinuxPath)(config.localDirectory)
+        : config.localDirectory;
+    await (0, exports.checkRsyncDependencies)();
+    await (0, exports.handleKnownHosts)(config.host);
+    const rsyncFlags = [isDryRun ? '-rzvLn' : '-rzvL'];
+    if (syncMode === types_1.SymitarSyncMode.MIRROR) {
+        rsyncFlags.push('--delete');
+    }
+    rsyncFlags.push('--no-group', '--no-perms', '--itemize-changes', '--out-format="%i %n"', '--size-only', '--chmod=ug=rwX,o=');
+    const isPull = syncMode === types_1.SymitarSyncMode.PULL;
+    const source = isPull ? remoteDirectory : localDirectory;
+    const destination = isPull ? localDirectory : remoteDirectory;
+    const rsyncCommand = [
+        process.platform === 'win32'
+            ? `wsl -e sshpass -p "${config.password}"`
+            : `sshpass -p "${config.password}"`,
+        'rsync',
+        ...rsyncFlags,
+        source,
+        destination,
+    ].join(' ');
+    const changedPowerOns = {
+        deleted: [],
+        deployed: [],
+    };
+    const output = await (0, exports.executeRsyncCommand)(rsyncCommand);
+    const lines = output.split('\n').map((line) => line.trim());
+    for (const line of lines) {
+        if (line.startsWith('*deleting')) {
+            const filename = line.replace('*deleting', '').trim().split(' ').pop() || '';
+            if (filename !== '') {
+                changedPowerOns.deleted.push(filename);
             }
         }
-        resolve(changedPowerOns);
-    });
+        else if (line.startsWith('<f') || line.startsWith('>f')) {
+            const filename = line.slice(10).trim().split(' ').pop() || '';
+            if (filename !== '') {
+                changedPowerOns.deployed.push(filename);
+            }
+        }
+    }
+    return changedPowerOns;
 };
-exports.executePowerOnRsync = executePowerOnRsync;
+exports.executeRsync = executeRsync;
 const convertToLinuxPath = (path) => {
     let linuxPath = path.replace(/\\/g, '/');
     const driveLetterMatch = linuxPath.match(/^([a-zA-Z]):\//);
@@ -6101,15 +7123,12 @@ const convertToLinuxPath = (path) => {
 };
 exports.convertToLinuxPath = convertToLinuxPath;
 const handleKnownHosts = async (host) => {
-    return new Promise(async (resolve, reject) => {
-        try {
-            await runBashScript(scripts_1.UPDATE_KNOWN_HOSTS, [host]);
-            resolve();
-        }
-        catch (error) {
-            reject(new Error(`Unable to add Symitar host: ${host} to known_hosts file. ${error.message}`));
-        }
-    });
+    try {
+        await runBashScript(scripts_1.UPDATE_KNOWN_HOSTS, [host]);
+    }
+    catch (error) {
+        throw new Error(`Unable to add Symitar host: ${host} to known_hosts file. ${error.message}`);
+    }
 };
 exports.handleKnownHosts = handleKnownHosts;
 const paddedSymNumber = (symNumber) => {
@@ -6120,15 +7139,253 @@ exports.paddedSymNumber = paddedSymNumber;
 
 /***/ }),
 
-/***/ 16016:
+/***/ 58924:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.mayContainCredentials = exports.sanitizeForLogging = void 0;
+exports.createTransports = createTransports;
+exports.createLogger = createLogger;
+const stream_1 = __nccwpck_require__(2203);
+const winston_1 = __importDefault(__nccwpck_require__(68360));
+const SSHPASS_PATTERN = /sshpass\s+-p\s+["']?[^"'\s]+["']?/gi;
+const SYMITAR_CREDENTIAL_PATTERN = /(\d{1,5})\.([^\s\r\n~]+)/g;
+const PASSWORD_VALUE_PATTERN = /password[=:]\s*["']?[^"'\s\r\n]+["']?/gi;
+const sanitizeForLogging = (message) => {
+    if (!message)
+        return message;
+    return (message
+        .replace(SSHPASS_PATTERN, 'sshpass -p *****')
+        .replace(SYMITAR_CREDENTIAL_PATTERN, '$1.*****')
+        .replace(PASSWORD_VALUE_PATTERN, 'password=*****'));
+};
+exports.sanitizeForLogging = sanitizeForLogging;
+const mayContainCredentials = (message) => {
+    if (!message)
+        return false;
+    return (SSHPASS_PATTERN.test(message) ||
+        SYMITAR_CREDENTIAL_PATTERN.test(message) ||
+        PASSWORD_VALUE_PATTERN.test(message));
+};
+exports.mayContainCredentials = mayContainCredentials;
+function createTransports(customLogger) {
+    if (customLogger) {
+        const customStream = new stream_1.Writable({
+            write(chunk, _encoding, callback) {
+                try {
+                    const info = JSON.parse(chunk.toString());
+                    customLogger(info.level, info.message);
+                }
+                catch {
+                    customLogger('info', chunk.toString().trim());
+                }
+                callback();
+            },
+        });
+        return [
+            new winston_1.default.transports.Stream({
+                stream: customStream,
+                format: winston_1.default.format.combine(winston_1.default.format.timestamp(), winston_1.default.format.json()),
+            }),
+        ];
+    }
+    return [new winston_1.default.transports.Console()];
+}
+function createLogger(logLevel, customLogger) {
+    const format = customLogger
+        ? winston_1.default.format.simple()
+        : winston_1.default.format.combine(winston_1.default.format.colorize(), winston_1.default.format.printf(({ message }) => `${message}`));
+    return winston_1.default.createLogger({
+        level: logLevel,
+        format,
+        transports: createTransports(customLogger),
+    });
+}
+//# sourceMappingURL=logging.js.map
+
+/***/ }),
+
+/***/ 64371:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.POWERON_PRINT_TITLE_PATTERN = exports.POWERON_TARGET_PATTERN = exports.EXTENSIONS_TO_SKIP_VALIDATION = exports.POWERON_EXTENSIONS = void 0;
+exports.isPowerOnFile = isPowerOnFile;
+exports.removeBlockComments = removeBlockComments;
+exports.getFirstWord = getFirstWord;
+exports.hasTargetDivision = hasTargetDivision;
+exports.hasPrintDivision = hasPrintDivision;
+exports.isValidPowerOnSpecfile = isValidPowerOnSpecfile;
+exports.shouldValidatePowerOnByExtension = shouldValidatePowerOnByExtension;
+exports.shouldValidatePowerOn = shouldValidatePowerOn;
+exports.shouldValidatePowerOnFile = shouldValidatePowerOnFile;
+exports.getSkipReason = getSkipReason;
+exports.getSkipReasonForFile = getSkipReasonForFile;
+const fs = __importStar(__nccwpck_require__(79896));
+const path = __importStar(__nccwpck_require__(16928));
+exports.POWERON_EXTENSIONS = [
+    '.PO',
+    '.RG',
+    '.DEF',
+    '.SET',
+    '.PRO',
+    '.SUB',
+    '.FM',
+    '.FMP',
+];
+exports.EXTENSIONS_TO_SKIP_VALIDATION = [
+    '.PRO',
+    '.DEF',
+    '.SET',
+    '.FMP',
+    '.SUB',
+];
+exports.POWERON_TARGET_PATTERN = /target\s*=\s*\S+/i;
+exports.POWERON_PRINT_TITLE_PATTERN = /print\s+title\s*=\s*(?:"[^"]*"|\S+)/i;
+function isPowerOnFile(filePath) {
+    const ext = path.extname(filePath).toUpperCase();
+    return exports.POWERON_EXTENSIONS.some((poExt) => poExt === ext);
+}
+function removeBlockComments(content) {
+    return content.replace(/\[[\s\S]*?\]/g, '');
+}
+function getFirstWord(content) {
+    const noBlockComments = removeBlockComments(content);
+    const trimmed = noBlockComments.trim();
+    const match = trimmed.match(/^([A-Za-z0-9]+)/);
+    return match ? match[1] : '';
+}
+function hasTargetDivision(content) {
+    return exports.POWERON_TARGET_PATTERN.test(content);
+}
+function hasPrintDivision(content) {
+    return exports.POWERON_PRINT_TITLE_PATTERN.test(content);
+}
+function isValidPowerOnSpecfile(content) {
+    const contentNoComments = removeBlockComments(content);
+    const firstWord = getFirstWord(content);
+    if (firstWord.toUpperCase() === 'PROCEDURE') {
+        return false;
+    }
+    return (hasTargetDivision(contentNoComments) && hasPrintDivision(contentNoComments));
+}
+function shouldValidatePowerOnByExtension(filePath) {
+    const ext = path.extname(filePath).toUpperCase();
+    return !exports.EXTENSIONS_TO_SKIP_VALIDATION.some((skipExt) => skipExt === ext);
+}
+function shouldValidatePowerOn(filePath, fileContent) {
+    if (!shouldValidatePowerOnByExtension(filePath)) {
+        return false;
+    }
+    if (fileContent) {
+        return isValidPowerOnSpecfile(fileContent);
+    }
+    return true;
+}
+async function shouldValidatePowerOnFile(filePath) {
+    if (!shouldValidatePowerOnByExtension(filePath)) {
+        return false;
+    }
+    try {
+        const content = await fs.promises.readFile(filePath, 'utf-8');
+        return isValidPowerOnSpecfile(content);
+    }
+    catch {
+        return true;
+    }
+}
+function getSkipReason(filePath, fileContent) {
+    const ext = path.extname(filePath).toUpperCase();
+    if (!shouldValidatePowerOnByExtension(filePath)) {
+        return `File extension (${ext}) is used as #INCLUDE file and should not be validated as standalone.`;
+    }
+    if (!fileContent) {
+        return null;
+    }
+    const contentNoComments = removeBlockComments(fileContent);
+    const firstWord = getFirstWord(fileContent);
+    if (firstWord.toUpperCase() === 'PROCEDURE') {
+        return 'File is a procedure file and should not be validated as standalone.';
+    }
+    const hasTarget = hasTargetDivision(contentNoComments);
+    const hasPrint = hasPrintDivision(contentNoComments);
+    if (!hasTarget && !hasPrint) {
+        return 'Missing required TARGET and PRINT TITLE divisions.';
+    }
+    if (!hasTarget) {
+        return 'Missing required TARGET division.';
+    }
+    if (!hasPrint) {
+        return 'Missing required PRINT TITLE division.';
+    }
+    return null;
+}
+async function getSkipReasonForFile(filePath) {
+    const ext = path.extname(filePath).toUpperCase();
+    if (!shouldValidatePowerOnByExtension(filePath)) {
+        return `File extension (${ext}) is used as #INCLUDE file and should not be validated as standalone.`;
+    }
+    try {
+        const content = await fs.promises.readFile(filePath, 'utf-8');
+        return getSkipReason(filePath, content);
+    }
+    catch {
+        return null;
+    }
+}
+//# sourceMappingURL=poweron-detection.js.map
+
+/***/ }),
+
+/***/ 20797:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.UPDATE_KNOWN_HOSTS = void 0;
+exports.GET_BATCH_SEQUENCES = exports.GET_REPORT_BY_SEQUENCE = exports.GET_LATEST_REPORT = exports.UPDATE_KNOWN_HOSTS = void 0;
 exports.UPDATE_KNOWN_HOSTS = `
-#!/bin/bash
+#!/bin/sh
 
 # Check if an argument is provided
 if [ "$#" -ne 1 ]; then
@@ -6160,20 +7417,179 @@ if ! grep -q "$TARGET_IP" "$KNOWN_HOSTS_FILE"; then
   ssh-keyscan "$TARGET_IP" 2>/dev/null | grep -v '^#' >> "$KNOWN_HOSTS_FILE"
 fi
 `;
+exports.GET_LATEST_REPORT = `
+#!/bin/sh
+
+# Check if parameters are provided
+if [ -z "$1" ] || [ -z "$2" ]; then
+  echo "Usage: $0 <sym> <title> [<hours>]"
+  exit 1
+fi
+
+sym=$1
+title=$2
+directory="/SYM/SYM\${sym}/REPORT"
+
+# Optional: Number of hours to restrict the search to
+hours=$3
+
+# Check if the directory exists
+if [ ! -d "$directory" ]; then
+  echo "Directory does not exist"
+  exit 1
+fi
+
+# Find files starting with %JOBFILE on the first line, restricted to last n hours if provided
+if [ -n "$hours" ]; then
+  files=$(find "$directory" -type f -mmin -$((hours * 60)) -exec grep -rl "^%JOBFILE" {} + 2>/dev/null | xargs grep -il "Title: $title" 2>/dev/null)
+else
+  files=$(grep -rl "^%JOBFILE" "$directory" 2>/dev/null | xargs grep -il "Title: $title" 2>/dev/null)
+fi
+
+# Check if any files were found
+if [ -z "$files" ]; then
+  echo "No files found"
+  exit 1
+else
+  # Sort the files by name (which is the sequence number) and get the latest one.
+  # This is the job file (batch summary)
+  job_file=$(echo "$files" | tr ' ' '\n' | sort -r | head -n 1)
+  job_sequence=$(basename "$job_file")
+
+  if [ -z "$job_sequence" ]; then
+    echo "No sequence found"
+    exit 1
+  fi
+
+  # Extract the report sequence from the job file (first Seq: value)
+  report_sequence=$(awk '/Seq: [0-9]{6}/ { for (i = 1; i <= NF; i++) if ($i ~ /^Seq:/) { print $(i+1); exit } }' "$job_file")
+
+  # If no report sequence found, use the job sequence
+  if [ -z "$report_sequence" ]; then
+    report_sequence="$job_sequence"
+  fi
+
+  report_file="$directory/$report_sequence"
+
+  echo "Report \${report_sequence} - \${title} --------------------------------------------------------------------"
+  echo "<<<JOB_SEQUENCE>>>"
+  echo "$job_sequence"
+  echo "<<<END_JOB_SEQUENCE>>>"
+  echo "<<<BATCH_SUMMARY>>>"
+  cat "$job_file"
+  echo "<<<END_BATCH_SUMMARY>>>"
+  echo "<<<REPORT_CONTENT>>>"
+  if [ -f "$report_file" ]; then
+    cat "$report_file"
+  else
+    echo "Report file not found: $report_file"
+  fi
+fi
+`;
+exports.GET_REPORT_BY_SEQUENCE = `
+#!/bin/sh
+
+# Check if a parameter is provided
+if [ -z "$1" ] || [ -z "$2" ]; then
+  echo "Usage: $0 <sym> <sequence>"
+  exit 1
+fi
+
+sym=$1
+sequence=$2
+directory="/SYM/SYM\${sym}/REPORT"
+
+# Check if the directory exists
+if [ ! -d "$directory" ]; then
+  exit 1
+fi
+
+# Check to see if the sequence is a number (POSIX-compatible)
+case "$sequence" in
+  *[!0-9]*|"")
+    echo "Sequence is not a number"
+    exit 1
+    ;;
+esac
+
+if [ ! -f "$directory/$sequence" ]; then
+  echo "File does not exist"
+  exit 1
+fi
+
+echo "Report \${sequence} --------------------------------------------------------------------"
+cat "$directory/$sequence"
+`;
+exports.GET_BATCH_SEQUENCES = `
+#!/bin/sh
+
+# Check if parameters are provided
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+  echo "Usage: $0 <sym> <title> <timeout_seconds>"
+  exit 1
+fi
+
+sym=$1
+title=$2
+timeout=$3
+directory="/SYM/SYM\${sym}/REPORT"
+
+# Check if the directory exists
+if [ ! -d "$directory" ]; then
+  echo "Directory does not exist"
+  exit 1
+fi
+
+start_epoch=$(( $(date +%s) - 10 ))
+end_epoch=$(( $(date +%s) + timeout ))
+
+while [ "$(date +%s)" -lt "$end_epoch" ]; do
+  current_time=$(date +%s)
+  minutes_since_start=$(( (current_time - start_epoch) / 60 ))
+  [ $minutes_since_start -eq 0 ] && minutes_since_start=1
+
+  files=$(find "$directory" -type f -mmin -"$minutes_since_start" 2>/dev/null | \\
+    xargs grep -l "^%JOBFILE" 2>/dev/null | \\
+    xargs grep -E -il "Title: $title\$" 2>/dev/null)
+
+  if [ -n "$files" ]; then
+    matched_file=$(echo "$files" | sort | tail -n 1)
+
+    # Use awk to extract numbers after "Seq:"
+    seqs=$(awk '/Seq: [0-9]{6}/ { for (i = 1; i <= NF; i++) if ($i ~ /^Seq:/) print $(i+1) }' "$matched_file")
+
+    filename=$(basename "$matched_file")
+
+    # Combine into a single comma-separated string
+    output=$(echo "$seqs" | paste -sd "," -)
+    if [ -n "$output" ]; then
+      echo "$output,$filename"
+    else
+      echo "$filename"
+    fi
+    exit 0
+  fi
+
+  sleep 1
+done
+
+exit 1
+`;
 //# sourceMappingURL=scripts.js.map
 
 /***/ }),
 
-/***/ 24709:
+/***/ 91756:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SymitarAppServerFileType = exports.SymitarAppServerAction = exports.SymitarAppServerService = exports.SymitarCLIValidatePrompts = exports.SymitarCLIRunPrompts = exports.SymitarCLIInstallPrompts = exports.SymitarWorkerType = exports.SymitarFileType = exports.SymitarCLILogin = void 0;
+exports.BatchQueueSelection = exports.SymitarAppServerFileType = exports.SymitarAppServerAction = exports.SymitarAppServerService = exports.SymitarCLIValidatePrompts = exports.SymitarCLIExecutePrompts = exports.SymitarCLIUninstallPrompts = exports.SymitarCLIInstallPrompts = exports.SymitarWorkerType = exports.SymitarFileType = exports.SymitarDirectory = exports.SymitarSyncMode = exports.SymitarSyncDirectory = exports.SymitarCLILogin = void 0;
 var SymitarCLILogin;
 (function (SymitarCLILogin) {
     SymitarCLILogin["AIX_SHELL"] = "$ ";
+    SymitarCLILogin["AIX_SHELL_ROOT"] = "# ";
     SymitarCLILogin["AWAITING_APPROVAL"] = "Awaiting Approval";
     SymitarCLILogin["CLI_NOT_SUPPORTED"] = "no longer supported!";
     SymitarCLILogin["DEDICATE_THIS_CONSOLE"] = "Dedicate this console to";
@@ -6188,8 +7604,31 @@ var SymitarCLILogin;
     SymitarCLILogin["USER_ID"] = "UserId :";
     SymitarCLILogin["USER_RECORD_IN_USE"] = "User Record in use";
 })(SymitarCLILogin || (exports.SymitarCLILogin = SymitarCLILogin = {}));
+var SymitarSyncDirectory;
+(function (SymitarSyncDirectory) {
+    SymitarSyncDirectory["REPWRITERSPECS"] = "REPWRITERSPECS";
+    SymitarSyncDirectory["DATAFILES"] = "DATAFILES";
+    SymitarSyncDirectory["HELPFILES"] = "HELPFILES";
+    SymitarSyncDirectory["LETTERSPECS"] = "LETTERSPECS";
+})(SymitarSyncDirectory || (exports.SymitarSyncDirectory = SymitarSyncDirectory = {}));
+var SymitarSyncMode;
+(function (SymitarSyncMode) {
+    SymitarSyncMode["MIRROR"] = "mirror";
+    SymitarSyncMode["PUSH"] = "push";
+    SymitarSyncMode["PULL"] = "pull";
+})(SymitarSyncMode || (exports.SymitarSyncMode = SymitarSyncMode = {}));
+var SymitarDirectory;
+(function (SymitarDirectory) {
+    SymitarDirectory["REPWRITERSPECS"] = "REPWRITERSPECS";
+    SymitarDirectory["DATAFILES"] = "DATAFILES";
+    SymitarDirectory["HELPFILES"] = "HELPFILES";
+    SymitarDirectory["LETTERSPECS"] = "LETTERSPECS";
+})(SymitarDirectory || (exports.SymitarDirectory = SymitarDirectory = {}));
 var SymitarFileType;
 (function (SymitarFileType) {
+    SymitarFileType["DATAFILE"] = "DATAFILES";
+    SymitarFileType["HELPFILE"] = "HELPFILES";
+    SymitarFileType["LETTERFILE"] = "LETTERSPECS";
     SymitarFileType["POWERON_INSTALLED"] = "REPWRITERCODES";
     SymitarFileType["POWERON"] = "REPWRITERSPECS";
 })(SymitarFileType || (exports.SymitarFileType = SymitarFileType = {}));
@@ -6197,7 +7636,8 @@ var SymitarWorkerType;
 (function (SymitarWorkerType) {
     SymitarWorkerType["FETCH_REPORT"] = "fetch_report";
     SymitarWorkerType["INSTALL_POWERON"] = "install_poweron";
-    SymitarWorkerType["RUN_POWERON"] = "run_poweron";
+    SymitarWorkerType["UNINSTALL_POWERON"] = "uninstall_poweron";
+    SymitarWorkerType["EXECUTE_POWERON"] = "execute_poweron";
     SymitarWorkerType["TRANSFER_FILE"] = "transfer_file";
     SymitarWorkerType["VALIDATE_POWERON"] = "validate_poweron";
 })(SymitarWorkerType || (exports.SymitarWorkerType = SymitarWorkerType = {}));
@@ -6205,10 +7645,14 @@ var SymitarCLIInstallPrompts;
 (function (SymitarCLIInstallPrompts) {
     SymitarCLIInstallPrompts["POWERON_FILE_NAME"] = "PowerOn Specification File Name";
 })(SymitarCLIInstallPrompts || (exports.SymitarCLIInstallPrompts = SymitarCLIInstallPrompts = {}));
-var SymitarCLIRunPrompts;
-(function (SymitarCLIRunPrompts) {
-    SymitarCLIRunPrompts["POWERON_FILE"] = "Specification File";
-})(SymitarCLIRunPrompts || (exports.SymitarCLIRunPrompts = SymitarCLIRunPrompts = {}));
+var SymitarCLIUninstallPrompts;
+(function (SymitarCLIUninstallPrompts) {
+    SymitarCLIUninstallPrompts["INSTALLED_POWERON_FILE_NAME"] = "Installed PowerOn File Name";
+})(SymitarCLIUninstallPrompts || (exports.SymitarCLIUninstallPrompts = SymitarCLIUninstallPrompts = {}));
+var SymitarCLIExecutePrompts;
+(function (SymitarCLIExecutePrompts) {
+    SymitarCLIExecutePrompts["POWERON_FILE"] = "Specification File";
+})(SymitarCLIExecutePrompts || (exports.SymitarCLIExecutePrompts = SymitarCLIExecutePrompts = {}));
 var SymitarCLIValidatePrompts;
 (function (SymitarCLIValidatePrompts) {
     SymitarCLIValidatePrompts["EDIT_SPECFILE"] = "Edit This Specfile";
@@ -6240,6 +7684,12 @@ var SymitarAppServerFileType;
     SymitarAppServerFileType["LETTERFILE"] = "LETTER";
     SymitarAppServerFileType["POWERON"] = "POWERON";
 })(SymitarAppServerFileType || (exports.SymitarAppServerFileType = SymitarAppServerFileType = {}));
+var BatchQueueSelection;
+(function (BatchQueueSelection) {
+    BatchQueueSelection["FIRST"] = "first";
+    BatchQueueSelection["PROMPT"] = "prompt";
+    BatchQueueSelection["OVERRIDE"] = "override";
+})(BatchQueueSelection || (exports.BatchQueueSelection = BatchQueueSelection = {}));
 //# sourceMappingURL=types.js.map
 
 /***/ }),
@@ -84202,6 +85652,7 @@ async function run() {
         const poweronDirectory = core.getInput('poweron-directory', { required: false }) || 'REPWRITERSPECS/';
         const targetBranch = core.getInput('target-branch', { required: false });
         const validateIgnore = core.getInput('validate-ignore', { required: false }) || '';
+        const debug = core.getInput('debug', { required: false }) === 'true';
         // Mask sensitive information
         core.setSecret(apiKey);
         core.setSecret(symitarUserPassword);
@@ -84252,6 +85703,9 @@ async function run() {
         if (ignoreList.length > 0) {
             core.info(`${logPrefix} Ignoring: ${ignoreList.join(', ')}`);
         }
+        if (debug) {
+            core.info(`${logPrefix} Debug mode: enabled`);
+        }
         // Run validation
         const startTime = Date.now();
         const result = await (0, validator_1.validatePowerOns)({
@@ -84269,6 +85723,7 @@ async function run() {
             targetBranch,
             ignoreList,
             logPrefix,
+            debug,
         });
         // Set outputs
         core.setOutput('files-validated', result.filesValidated);
@@ -84422,17 +85877,18 @@ exports.ConnectionError = ConnectionError;
  * Validates the provided API key against License API for active subscription.
  *
  * @param apiKey - The API key to validate
+ * @param host - The unique identifier for the host (restricted by subscription quantity)
  * @throws {AuthenticationError} When API key is invalid or subscription is not active
  * @throws {ConnectionError} When unable to connect to license server after retries
  */
-const validateApiKey = async (apiKey) => {
+const validateApiKey = async (apiKey, host) => {
     const logPrefix = '[ValidateSubscription]';
-    console.info(`${logPrefix} Validating API key`);
+    console.info(`${logPrefix} Validating API key for host: ${host}`);
     if (!apiKey || !apiKey.trim()) {
         console.error(`${logPrefix} No API key provided. Please make sure 'apiKey' is set properly in your workflow.`);
-        throw new AuthenticationError('PowerOn Pipelines API Key is missing', apiKey, '');
+        throw new AuthenticationError('PowerOn Pipelines API Key is missing', apiKey, host);
     }
-    const url = `https://${sstStagePrefix}license${isSandbox ? '.libum-sandbox' : ''}.libum.io/subscriptionsByApiKey?product=poweron-pipelines`;
+    const url = `https://${sstStagePrefix}license${isSandbox ? '.libum-sandbox' : ''}.libum.io/subscriptionsByApiKey?product=poweron-pipelines&unit=${host}`;
     for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
@@ -84447,18 +85903,22 @@ const validateApiKey = async (apiKey) => {
             });
             if (!response.ok) {
                 console.error(`${logPrefix} Failed to validate API key. Status: ${response.status}, Message: ${response.statusText}`);
-                throw new AuthenticationError(`Failed to validate API key: ${response.status} ${response.statusText}`, apiKey, '');
+                throw new AuthenticationError(`Failed to validate API key: ${response.status} ${response.statusText}`, apiKey, host);
             }
             const data = await response.json();
             // Validate response structure with type guard
             if (!isSubscriptionResponse(data)) {
-                throw new AuthenticationError('Invalid response format from license server', apiKey, '');
+                throw new AuthenticationError('Invalid response format from license server', apiKey, host);
             }
             if (!data.isFound) {
-                throw new AuthenticationError(`Provided API key was not found. Please make sure 'apiKey' is set properly in your workflow.`, apiKey, '');
+                throw new AuthenticationError(`Provided API key was not found. Please make sure 'apiKey' is set properly in your workflow.`, apiKey, host);
             }
             if (data.subscriptions.length === 0) {
-                throw new AuthenticationError(`No active subscription found for the provided API key.`, apiKey, '');
+                throw new AuthenticationError(`No active subscription found for the provided API key.`, apiKey, host);
+            }
+            // Check if maximum hosts exceeded
+            if (data.isMaxHostsExceeded) {
+                throw new AuthenticationError(`Provided API key has reached the maximum number of hosts allowed for the subscription. Please upgrade your subscription or remove unused hosts.`, apiKey, host);
             }
             console.info(`${logPrefix} API key validation successful`);
             return;
@@ -84534,16 +85994,24 @@ exports.validatePowerOns = validatePowerOns;
 const core = __importStar(__nccwpck_require__(16966));
 const exec = __importStar(__nccwpck_require__(92851));
 const path = __importStar(__nccwpck_require__(16928));
-const symitar_1 = __nccwpck_require__(62220);
+const symitar_1 = __nccwpck_require__(75947);
 const subscription_1 = __nccwpck_require__(14565);
-async function getChangedFiles(targetBranch, poweronDirectory, ignoreList) {
+async function getChangedFiles(targetBranch, poweronDirectory, ignoreList, logPrefix) {
     // Ensure we're running in the workspace directory
     const workspace = process.env.GITHUB_WORKSPACE;
     const execOptions = workspace ? { cwd: workspace } : {};
     if (!targetBranch) {
-        // If no target branch, validate all files in directory
+        // If no target branch, validate all PowerOn files in directory
+        // Build find command with all PowerOn extensions
+        const findArgs = [poweronDirectory, '-type', 'f', '('];
+        symitar_1.POWERON_EXTENSIONS.forEach((ext, index) => {
+            if (index > 0)
+                findArgs.push('-o');
+            findArgs.push('-iname', `*${ext}`);
+        });
+        findArgs.push(')');
         let output = '';
-        await exec.exec('find', [poweronDirectory, '-type', 'f', '-name', '*.PO'], {
+        await exec.exec('find', findArgs, {
             ...execOptions,
             silent: true,
             listeners: {
@@ -84552,11 +86020,28 @@ async function getChangedFiles(targetBranch, poweronDirectory, ignoreList) {
                 },
             },
         });
-        return output
-            .split('\n')
-            .filter((f) => f.trim().length > 0)
-            .filter((f) => !ignoreList.includes(path.basename(f)))
-            .map((f) => ({ filePath: f, status: 'existing' }));
+        const allFiles = output.split('\n').filter((f) => f.trim().length > 0);
+        // Filter to only files that should be validated
+        const filesToValidate = [];
+        for (const filePath of allFiles) {
+            const basename = path.basename(filePath);
+            // Check ignore list
+            if (ignoreList.includes(basename)) {
+                core.info(`${logPrefix} Skipping ${basename}. File is in ignore list.`);
+                continue;
+            }
+            const fullPath = path.isAbsolute(filePath)
+                ? filePath
+                : path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+            const skipReason = await (0, symitar_1.getSkipReasonForFile)(fullPath);
+            if (skipReason) {
+                core.info(`${logPrefix} Skipping ${basename}. ${skipReason}`);
+            }
+            else {
+                filesToValidate.push({ filePath, status: 'existing' });
+            }
+        }
+        return filesToValidate;
     }
     // Verify the target branch exists - try multiple formats
     const branchName = targetBranch.replace(/^origin\//, '');
@@ -84603,8 +86088,30 @@ async function getChangedFiles(targetBranch, poweronDirectory, ignoreList) {
             const status = parts[0];
             const filePath = parts[1];
             const basename = path.basename(filePath);
-            // Skip deleted files and ignored files
-            if (status !== 'D' && !ignoreList.includes(basename)) {
+            // Skip deleted files
+            if (status === 'D') {
+                core.info(`${logPrefix} Skipping ${basename}. File was deleted.`);
+                continue;
+            }
+            // Skip ignored files
+            if (ignoreList.includes(basename)) {
+                core.info(`${logPrefix} Skipping ${basename}. File is in ignore list.`);
+                continue;
+            }
+            // Skip non-PowerOn files
+            if (!(0, symitar_1.isPowerOnFile)(filePath)) {
+                core.info(`${logPrefix} Skipping ${basename}. Not detected to be a PowerOn file.`);
+                continue;
+            }
+            // Check if this PowerOn file should be validated
+            const fullPath = path.isAbsolute(filePath)
+                ? filePath
+                : path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+            const skipReason = await (0, symitar_1.getSkipReasonForFile)(fullPath);
+            if (skipReason) {
+                core.info(`${logPrefix} Skipping ${basename}: ${skipReason}`);
+            }
+            else {
                 changedFiles.push({
                     filePath,
                     status: status === 'A' ? 'added' : status === 'M' ? 'modified' : status,
@@ -84622,15 +86129,14 @@ async function validateWithHTTPs(config, files) {
         symNumber: parseInt(config.symNumber, 10),
         symitarUserNumber: config.symitarUserNumber,
         symitarUserPassword: config.symitarUserPassword,
-        apiKey: config.apiKey,
     };
     const sshConfig = {
-        host: config.symitarHostname,
         port: config.sshPort,
         username: config.sshUsername,
         password: config.sshPassword,
     };
-    const client = new symitar_1.SymitarHTTPs(baseUrl, symitarConfig, 'info', sshConfig);
+    const logLevel = config.debug ? 'debug' : 'info';
+    const client = new symitar_1.SymitarHTTPs(baseUrl, symitarConfig, logLevel, sshConfig);
     try {
         const errors = [];
         const validatedFiles = [];
@@ -84672,19 +86178,20 @@ async function validateWithSSH(config, files) {
         username: config.sshUsername,
         password: config.sshPassword,
     };
-    const client = new symitar_1.SymitarSSH(sshConfig);
+    const logLevel = config.debug ? 'debug' : 'warn';
+    const client = new symitar_1.SymitarSSH(sshConfig, logLevel);
     await client.isReady;
     try {
         const symitarConfig = {
             symNumber: parseInt(config.symNumber, 10),
             symitarUserNumber: config.symitarUserNumber,
             symitarUserPassword: config.symitarUserPassword,
-            apiKey: config.apiKey,
         };
         const worker = await client.createValidateWorker(symitarConfig);
         const errors = [];
         const validatedFiles = [];
         let filesFailed = 0;
+        // Process files sequentially - worker maintains state and resets after each validation
         for (const file of files) {
             const fileName = path.basename(file.filePath);
             validatedFiles.push(fileName);
@@ -84696,11 +86203,13 @@ async function validateWithSSH(config, files) {
                     const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
                     errors.push(`${fileName}: ${errorMsg}`);
                 }
+                core.info(`${config.logPrefix} ✓ ${fileName} validated`);
             }
             catch (error) {
                 filesFailed++;
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 errors.push(`${fileName}: ${errorMsg}`);
+                core.info(`${config.logPrefix} ✗ ${fileName} failed`);
             }
         }
         return {
@@ -84718,10 +86227,10 @@ async function validateWithSSH(config, files) {
 async function validatePowerOns(config) {
     // Validate API key
     core.info(`${config.logPrefix} Validating API key...`);
-    await (0, subscription_1.validateApiKey)(config.apiKey);
+    await (0, subscription_1.validateApiKey)(config.apiKey, config.symitarHostname);
     core.info(`${config.logPrefix} API key validation successful`);
     // Get changed files
-    const files = await getChangedFiles(config.targetBranch, config.poweronDirectory, config.ignoreList);
+    const files = await getChangedFiles(config.targetBranch, config.poweronDirectory, config.ignoreList, config.logPrefix);
     if (files.length === 0) {
         core.info(`${config.logPrefix} No PowerOn files found to validate`);
         return {
@@ -91947,7 +93456,7 @@ module.exports = {"version":"3.18.3"};
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.0.0","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && rm -f dist/*.d.ts dist/*.d.ts.map dist/pagent.exe && rm -rf dist/build dist/lib","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \'src/**/*.ts\' \'__tests__/**/*.ts\'","lint:fix":"eslint --cache --quiet --fix && prettier --write \'src/**/*.ts\' \'__tests__/**/*.ts\'","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"^0.0.39"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.1.7","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && rm -f dist/*.d.ts dist/*.d.ts.map dist/pagent.exe && rm -rf dist/build dist/lib","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \'src/**/*.ts\' \'__tests__/**/*.ts\'","lint:fix":"eslint --cache --quiet --fix && prettier --write \'src/**/*.ts\' \'__tests__/**/*.ts\'","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"^0.7.4"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
 
 /***/ })
 

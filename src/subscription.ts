@@ -31,6 +31,7 @@ interface SubscriptionResponse {
     id: string;
     status: string;
   }>;
+  isMaxHostsExceeded?: boolean;
 }
 
 /**
@@ -85,21 +86,22 @@ export class ConnectionError extends Error {
  * Validates the provided API key against License API for active subscription.
  *
  * @param apiKey - The API key to validate
+ * @param host - The unique identifier for the host (restricted by subscription quantity)
  * @throws {AuthenticationError} When API key is invalid or subscription is not active
  * @throws {ConnectionError} When unable to connect to license server after retries
  */
-export const validateApiKey = async (apiKey: string): Promise<void> => {
+export const validateApiKey = async (apiKey: string, host: string): Promise<void> => {
   const logPrefix = '[ValidateSubscription]';
-  console.info(`${logPrefix} Validating API key`);
+  console.info(`${logPrefix} Validating API key for host: ${host}`);
 
   if (!apiKey || !apiKey.trim()) {
     console.error(
       `${logPrefix} No API key provided. Please make sure 'apiKey' is set properly in your workflow.`,
     );
-    throw new AuthenticationError('PowerOn Pipelines API Key is missing', apiKey, '');
+    throw new AuthenticationError('PowerOn Pipelines API Key is missing', apiKey, host);
   }
 
-  const url = `https://${sstStagePrefix}license${isSandbox ? '.libum-sandbox' : ''}.libum.io/subscriptionsByApiKey?product=poweron-pipelines`;
+  const url = `https://${sstStagePrefix}license${isSandbox ? '.libum-sandbox' : ''}.libum.io/subscriptionsByApiKey?product=poweron-pipelines&unit=${host}`;
 
   for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
     const controller = new AbortController();
@@ -122,7 +124,7 @@ export const validateApiKey = async (apiKey: string): Promise<void> => {
         throw new AuthenticationError(
           `Failed to validate API key: ${response.status} ${response.statusText}`,
           apiKey,
-          '',
+          host,
         );
       }
 
@@ -130,14 +132,14 @@ export const validateApiKey = async (apiKey: string): Promise<void> => {
 
       // Validate response structure with type guard
       if (!isSubscriptionResponse(data)) {
-        throw new AuthenticationError('Invalid response format from license server', apiKey, '');
+        throw new AuthenticationError('Invalid response format from license server', apiKey, host);
       }
 
       if (!data.isFound) {
         throw new AuthenticationError(
           `Provided API key was not found. Please make sure 'apiKey' is set properly in your workflow.`,
           apiKey,
-          '',
+          host,
         );
       }
 
@@ -145,7 +147,16 @@ export const validateApiKey = async (apiKey: string): Promise<void> => {
         throw new AuthenticationError(
           `No active subscription found for the provided API key.`,
           apiKey,
-          '',
+          host,
+        );
+      }
+
+      // Check if maximum hosts exceeded
+      if (data.isMaxHostsExceeded) {
+        throw new AuthenticationError(
+          `Provided API key has reached the maximum number of hosts allowed for the subscription. Please upgrade your subscription or remove unused hosts.`,
+          apiKey,
+          host,
         );
       }
 

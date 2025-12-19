@@ -23,6 +23,7 @@ async function run(): Promise<void> {
       core.getInput('poweron-directory', { required: false }) || 'REPWRITERSPECS/';
     const targetBranch = core.getInput('target-branch', { required: false });
     const validateIgnore = core.getInput('validate-ignore', { required: false }) || '';
+    const debug = core.getInput('debug', { required: false }) === 'true';
 
     // Mask sensitive information
     core.setSecret(apiKey);
@@ -83,6 +84,10 @@ async function run(): Promise<void> {
       core.info(`${logPrefix} Ignoring: ${ignoreList.join(', ')}`);
     }
 
+    if (debug) {
+      core.info(`${logPrefix} Debug mode: enabled`);
+    }
+
     // Run validation
     const startTime = Date.now();
     const result = await validatePowerOns({
@@ -100,6 +105,7 @@ async function run(): Promise<void> {
       targetBranch,
       ignoreList,
       logPrefix,
+      debug,
     });
 
     // Set outputs

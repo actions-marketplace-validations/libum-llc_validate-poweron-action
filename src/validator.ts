@@ -1,7 +1,13 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as path from 'path';
-import { SymitarHTTPs, SymitarSSH } from '@libum-llc/symitar';
+import {
+  SymitarHTTPs,
+  SymitarSSH,
+  isPowerOnFile,
+  getSkipReasonForFile,
+  POWERON_EXTENSIONS,
+} from '@libum-llc/symitar';
 import { validateApiKey } from './subscription';
 
 export interface ValidationConfig {
@@ -19,6 +25,7 @@ export interface ValidationConfig {
   targetBranch?: string;
   ignoreList: string[];
   logPrefix: string;
+  debug?: boolean;
 }
 
 export interface ValidationResult {
@@ -38,15 +45,24 @@ async function getChangedFiles(
   targetBranch: string | undefined,
   poweronDirectory: string,
   ignoreList: string[],
+  logPrefix: string,
 ): Promise<ChangedFile[]> {
   // Ensure we're running in the workspace directory
   const workspace = process.env.GITHUB_WORKSPACE;
   const execOptions = workspace ? { cwd: workspace } : {};
 
   if (!targetBranch) {
-    // If no target branch, validate all files in directory
+    // If no target branch, validate all PowerOn files in directory
+    // Build find command with all PowerOn extensions
+    const findArgs = [poweronDirectory, '-type', 'f', '('];
+    POWERON_EXTENSIONS.forEach((ext, index) => {
+      if (index > 0) findArgs.push('-o');
+      findArgs.push('-iname', `*${ext}`);
+    });
+    findArgs.push(')');
+
     let output = '';
-    await exec.exec('find', [poweronDirectory, '-type', 'f', '-name', '*.PO'], {
+    await exec.exec('find', findArgs, {
       ...execOptions,
       silent: true,
       listeners: {
@@ -56,11 +72,32 @@ async function getChangedFiles(
       },
     });
 
-    return output
-      .split('\n')
-      .filter((f) => f.trim().length > 0)
-      .filter((f) => !ignoreList.includes(path.basename(f)))
-      .map((f) => ({ filePath: f, status: 'existing' }));
+    const allFiles = output.split('\n').filter((f) => f.trim().length > 0);
+
+    // Filter to only files that should be validated
+    const filesToValidate: ChangedFile[] = [];
+    for (const filePath of allFiles) {
+      const basename = path.basename(filePath);
+
+      // Check ignore list
+      if (ignoreList.includes(basename)) {
+        core.info(`${logPrefix} Skipping ${basename}. File is in ignore list.`);
+        continue;
+      }
+
+      const fullPath = path.isAbsolute(filePath)
+        ? filePath
+        : path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+
+      const skipReason = await getSkipReasonForFile(fullPath);
+      if (skipReason) {
+        core.info(`${logPrefix} Skipping ${basename}. ${skipReason}`);
+      } else {
+        filesToValidate.push({ filePath, status: 'existing' });
+      }
+    }
+
+    return filesToValidate;
   }
 
   // Verify the target branch exists - try multiple formats
@@ -118,8 +155,33 @@ async function getChangedFiles(
       const filePath = parts[1];
       const basename = path.basename(filePath);
 
-      // Skip deleted files and ignored files
-      if (status !== 'D' && !ignoreList.includes(basename)) {
+      // Skip deleted files
+      if (status === 'D') {
+        core.info(`${logPrefix} Skipping ${basename}. File was deleted.`);
+        continue;
+      }
+
+      // Skip ignored files
+      if (ignoreList.includes(basename)) {
+        core.info(`${logPrefix} Skipping ${basename}. File is in ignore list.`);
+        continue;
+      }
+
+      // Skip non-PowerOn files
+      if (!isPowerOnFile(filePath)) {
+        core.info(`${logPrefix} Skipping ${basename}. Not detected to be a PowerOn file.`);
+        continue;
+      }
+
+      // Check if this PowerOn file should be validated
+      const fullPath = path.isAbsolute(filePath)
+        ? filePath
+        : path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+
+      const skipReason = await getSkipReasonForFile(fullPath);
+      if (skipReason) {
+        core.info(`${logPrefix} Skipping ${basename}: ${skipReason}`);
+      } else {
         changedFiles.push({
           filePath,
           status: status === 'A' ? 'added' : status === 'M' ? 'modified' : status,
@@ -142,17 +204,16 @@ async function validateWithHTTPs(
     symNumber: parseInt(config.symNumber, 10),
     symitarUserNumber: config.symitarUserNumber,
     symitarUserPassword: config.symitarUserPassword,
-    apiKey: config.apiKey,
   };
 
   const sshConfig = {
-    host: config.symitarHostname,
     port: config.sshPort,
     username: config.sshUsername,
     password: config.sshPassword,
   };
 
-  const client = new SymitarHTTPs(baseUrl, symitarConfig, 'info', sshConfig);
+  const logLevel = config.debug ? 'debug' : 'info';
+  const client = new SymitarHTTPs(baseUrl, symitarConfig, logLevel, sshConfig);
 
   try {
     const errors: string[] = [];
@@ -200,7 +261,8 @@ async function validateWithSSH(
     password: config.sshPassword,
   };
 
-  const client = new SymitarSSH(sshConfig);
+  const logLevel = config.debug ? 'debug' : 'warn';
+  const client = new SymitarSSH(sshConfig, logLevel);
   await client.isReady;
 
   try {
@@ -208,7 +270,6 @@ async function validateWithSSH(
       symNumber: parseInt(config.symNumber, 10),
       symitarUserNumber: config.symitarUserNumber,
       symitarUserPassword: config.symitarUserPassword,
-      apiKey: config.apiKey,
     };
 
     const worker = await client.createValidateWorker(symitarConfig);
@@ -217,10 +278,12 @@ async function validateWithSSH(
     const validatedFiles: string[] = [];
     let filesFailed = 0;
 
+    // Process files sequentially - worker maintains state and resets after each validation
     for (const file of files) {
       const fileName = path.basename(file.filePath);
       validatedFiles.push(fileName);
       core.info(`${config.logPrefix} Validating ${file.filePath}...`);
+
       try {
         const result = await worker.validatePowerOn(file.filePath);
         if (!result.isValid) {
@@ -228,10 +291,12 @@ async function validateWithSSH(
           const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
           errors.push(`${fileName}: ${errorMsg}`);
         }
+        core.info(`${config.logPrefix} ✓ ${fileName} validated`);
       } catch (error) {
         filesFailed++;
         const errorMsg = error instanceof Error ? error.message : String(error);
         errors.push(`${fileName}: ${errorMsg}`);
+        core.info(`${config.logPrefix} ✗ ${fileName} failed`);
       }
     }
 
@@ -250,7 +315,7 @@ async function validateWithSSH(
 export async function validatePowerOns(config: ValidationConfig): Promise<ValidationResult> {
   // Validate API key
   core.info(`${config.logPrefix} Validating API key...`);
-  await validateApiKey(config.apiKey);
+  await validateApiKey(config.apiKey, config.symitarHostname);
   core.info(`${config.logPrefix} API key validation successful`);
 
   // Get changed files
@@ -258,6 +323,7 @@ export async function validatePowerOns(config: ValidationConfig): Promise<Valida
     config.targetBranch,
     config.poweronDirectory,
     config.ignoreList,
+    config.logPrefix,
   );
 
   if (files.length === 0) {

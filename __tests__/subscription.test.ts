@@ -20,7 +20,7 @@ describe('subscription', () => {
         }),
       } as Response);
 
-      await expect(validateApiKey('valid-key')).resolves.toBeUndefined();
+      await expect(validateApiKey('valid-key', 'test-host.example.com')).resolves.toBeUndefined();
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining('license.libum.io/subscriptionsByApiKey'),
@@ -35,11 +35,13 @@ describe('subscription', () => {
     });
 
     it('should reject when API key is empty', async () => {
-      await expect(validateApiKey('')).rejects.toThrow(AuthenticationError);
+      await expect(validateApiKey('', 'test-host.example.com')).rejects.toThrow(
+        AuthenticationError,
+      );
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('should include product query parameter in request URL', async () => {
+    it('should include product and unit query parameters in request URL', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -48,15 +50,30 @@ describe('subscription', () => {
         }),
       } as Response);
 
-      await validateApiKey('valid-key');
+      await validateApiKey('valid-key', 'test-host.example.com');
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining('product=poweron-pipelines'),
         expect.any(Object),
       );
       expect(mockFetch).toHaveBeenCalledWith(
-        expect.not.stringContaining('unit='),
+        expect.stringContaining('unit=test-host.example.com'),
         expect.any(Object),
+      );
+    });
+
+    it('should reject when max hosts exceeded', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          isFound: true,
+          subscriptions: [{ id: 'sub-123', status: 'active' }],
+          isMaxHostsExceeded: true,
+        }),
+      } as Response);
+
+      await expect(validateApiKey('valid-key', 'test-host.example.com')).rejects.toThrow(
+        AuthenticationError,
       );
     });
   });
