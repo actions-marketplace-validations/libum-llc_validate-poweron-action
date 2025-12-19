@@ -56,7 +56,7 @@ async function getSkipReason(filePath: string): Promise<string | null> {
 
   // Check if extension should be skipped
   if (!shouldValidatePowerOnByExtension(filePath)) {
-    return `${ext} files are include/procedure files (not validated standalone)`;
+    return `File extension (${ext}) is used as #INCLUDE file and should not be validated as standalone.`;
   }
 
   // Read file content for content-based checks
@@ -67,7 +67,7 @@ async function getSkipReason(filePath: string): Promise<string | null> {
     // Check if file starts with PROCEDURE
     const firstWord = getFirstWord(content);
     if (firstWord.toUpperCase() === 'PROCEDURE') {
-      return 'file is a PROCEDURE (not a specfile)';
+      return 'File is a procedure file and shold not be validated as standalone.';
     }
 
     // Check for required divisions
@@ -75,13 +75,13 @@ async function getSkipReason(filePath: string): Promise<string | null> {
     const hasPrint = hasPrintDivision(contentNoComments);
 
     if (!hasTarget && !hasPrint) {
-      return 'missing TARGET and PRINT TITLE divisions';
+      return 'Missing required TARGET and PRINT TITLE divisions.';
     }
     if (!hasTarget) {
-      return 'missing TARGET division';
+      return 'Missing TARGET division.';
     }
     if (!hasPrint) {
-      return 'missing PRINT TITLE division';
+      return 'Missing PRINT TITLE division.';
     }
 
     return null; // File should be validated
@@ -131,7 +131,7 @@ async function getChangedFiles(
 
       // Check ignore list
       if (ignoreList.includes(basename)) {
-        core.info(`${logPrefix} Skipping ${basename}: in ignore list`);
+        core.info(`${logPrefix} Skipping ${basename}. File is in ignore list.`);
         continue;
       }
 
@@ -141,7 +141,7 @@ async function getChangedFiles(
 
       const skipReason = await getSkipReason(fullPath);
       if (skipReason) {
-        core.info(`${logPrefix} Skipping ${basename}: ${skipReason}`);
+        core.info(`${logPrefix} Skipping ${basename}. ${skipReason}`);
       } else {
         filesToValidate.push({ filePath, status: 'existing' });
       }
@@ -207,19 +207,19 @@ async function getChangedFiles(
 
       // Skip deleted files
       if (status === 'D') {
-        core.info(`${logPrefix} Skipping ${basename}: file was deleted`);
+        core.info(`${logPrefix} Skipping ${basename}. File was deleted.`);
         continue;
       }
 
       // Skip ignored files
       if (ignoreList.includes(basename)) {
-        core.info(`${logPrefix} Skipping ${basename}: in ignore list`);
+        core.info(`${logPrefix} Skipping ${basename}. File is in ignore list.`);
         continue;
       }
 
       // Skip non-PowerOn files
       if (!isPowerOnFile(filePath)) {
-        core.info(`${logPrefix} Skipping ${basename}: not a PowerOn file`);
+        core.info(`${logPrefix} Skipping ${basename}. Not detected to be a PowerOn file.`);
         continue;
       }
 
