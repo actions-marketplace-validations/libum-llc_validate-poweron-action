@@ -506,17 +506,5 @@ describe('validator', () => {
         'test.symitar.example.com',
       );
     });
-
-    // Note: These tests verify error handling behavior when API validation fails
-    // The actual API key validation is tested in subscription.test.ts
-    it.skip('should throw error when API key validation fails', async () => {
-      // This test is skipped due to complex mock interactions
-      // The behavior is verified through integration testing
-    });
-
-    it.skip('should not process files if API key validation fails', async () => {
-      // This test is skipped due to complex mock interactions
-      // The behavior is verified through integration testing
-    });
   });
 });
