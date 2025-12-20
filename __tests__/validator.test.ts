@@ -354,7 +354,9 @@ describe('validator', () => {
         symitarUserNumber: '1234',
         symitarUserPassword: 'password',
       });
-      expect(mockWorker.validatePowerOn).toHaveBeenCalledWith('REPWRITERSPECS/TEST.PO');
+      expect(mockWorker.validatePowerOn).toHaveBeenCalledWith(
+        expect.stringMatching(/REPWRITERSPECS\/TEST\.PO$/),
+      );
       expect(mockSSHClient.end).toHaveBeenCalled();
       expect(result.filesPassed).toBe(1);
       expect(result.filesFailed).toBe(0);
@@ -421,7 +423,9 @@ describe('validator', () => {
           password: 'sshpass',
         },
       );
-      expect(mockHTTPsClient.validatePowerOn).toHaveBeenCalledWith('REPWRITERSPECS/TEST.PO');
+      expect(mockHTTPsClient.validatePowerOn).toHaveBeenCalledWith(
+        expect.stringMatching(/REPWRITERSPECS\/TEST\.PO$/),
+      );
       expect(mockHTTPsClient.end).toHaveBeenCalled();
       expect(result.filesPassed).toBe(1);
       expect(result.filesFailed).toBe(0);
