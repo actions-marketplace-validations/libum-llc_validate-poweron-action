@@ -158,7 +158,9 @@ async function validateWithHTTPs(
     // If no files provided, get changed files by comparing local directory with host
     let filesToValidate: ChangedFile[];
     if (files === null) {
-      core.info(`${config.logPrefix} Comparing local files with host...`);
+      core.info(
+        `${config.logPrefix} Comparing local files with Sym ${config.symNumber} on ${config.symitarHostname}...`,
+      );
       const workspace = process.env.GITHUB_WORKSPACE || '';
       const localDirectory = path.join(workspace, config.poweronDirectory);
       const changedPowerOns = await client.getChangedFiles(localDirectory);
@@ -261,7 +263,9 @@ async function validateWithSSH(
     // If no files provided, get changed files by comparing local directory with host
     let filesToValidate: ChangedFile[];
     if (files === null) {
-      core.info(`${config.logPrefix} Comparing local files with host...`);
+      core.info(
+        `${config.logPrefix} Comparing local files with Sym ${config.symNumber} on ${config.symitarHostname}...`,
+      );
       const workspace = process.env.GITHUB_WORKSPACE || '';
       const localDirectory = path.join(workspace, config.poweronDirectory);
       const changedPowerOns = await client.getChangedFiles(symitarConfig, localDirectory);
@@ -347,9 +351,7 @@ async function validateWithSSH(
 
 export async function validatePowerOns(config: ValidationConfig): Promise<ValidationResult> {
   // Validate API key
-  core.info(`${config.logPrefix} Validating API key...`);
   await validateApiKey(config.apiKey, config.symitarHostname);
-  core.info(`${config.logPrefix} API key validation successful`);
 
   // If target branch is provided, get changed files via git diff
   // Otherwise, pass null to let the client compare against the host
