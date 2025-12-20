@@ -86217,7 +86217,7 @@ async function validateWithHTTPs(config, files) {
             }
             core.info(`${config.logPrefix} Found ${filesToValidate.length} file(s) to validate:`);
             for (const file of filesToValidate) {
-                core.info(`${config.logPrefix} - ${file.filePath} (${file.status})`);
+                core.info(`${config.logPrefix} - ${path.basename(file.filePath)} (${file.status})`);
             }
         }
         else {
@@ -86229,7 +86229,7 @@ async function validateWithHTTPs(config, files) {
         for (const file of filesToValidate) {
             const fileName = path.basename(file.filePath);
             validatedFiles.push(fileName);
-            core.info(`${config.logPrefix} Validating ${file.filePath}...`);
+            core.info(`${config.logPrefix} Validating ${fileName}...`);
             try {
                 const result = await client.validatePowerOn(file.filePath);
                 if (!result.isValid) {
@@ -86308,7 +86308,7 @@ async function validateWithSSH(config, files) {
             }
             core.info(`${config.logPrefix} Found ${filesToValidate.length} file(s) to validate:`);
             for (const file of filesToValidate) {
-                core.info(`${config.logPrefix} - ${file.filePath} (${file.status})`);
+                core.info(`${config.logPrefix} - ${path.basename(file.filePath)} (${file.status})`);
             }
         }
         else {
@@ -86322,7 +86322,7 @@ async function validateWithSSH(config, files) {
         for (const file of filesToValidate) {
             const fileName = path.basename(file.filePath);
             validatedFiles.push(fileName);
-            core.info(`${config.logPrefix} Validating ${file.filePath}...`);
+            core.info(`${config.logPrefix} Validating ${fileName}...`);
             try {
                 const result = await worker.validatePowerOn(file.filePath);
                 if (!result.isValid) {
@@ -86372,7 +86372,7 @@ async function validatePowerOns(config) {
         }
         core.info(`${config.logPrefix} Found ${files.length} file(s) to validate:`);
         for (const file of files) {
-            core.info(`${config.logPrefix} - ${file.filePath} (${file.status})`);
+            core.info(`${config.logPrefix} - ${path.basename(file.filePath)} (${file.status})`);
         }
         // Validate based on connection type
         if (config.connectionType === 'https') {
@@ -93593,7 +93593,7 @@ module.exports = {"version":"3.18.3"};
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.1.12","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && rm -f dist/*.d.ts dist/*.d.ts.map dist/pagent.exe && rm -rf dist/build dist/lib","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \'src/**/*.ts\' \'__tests__/**/*.ts\'","lint:fix":"eslint --cache --quiet --fix && prettier --write \'src/**/*.ts\' \'__tests__/**/*.ts\'","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"0.8.1"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.1.13","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && rm -f dist/*.d.ts dist/*.d.ts.map dist/pagent.exe && rm -rf dist/build dist/lib","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \'src/**/*.ts\' \'__tests__/**/*.ts\'","lint:fix":"eslint --cache --quiet --fix && prettier --write \'src/**/*.ts\' \'__tests__/**/*.ts\'","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"0.8.1"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
 
 /***/ })
 

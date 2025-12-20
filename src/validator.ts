@@ -196,7 +196,7 @@ async function validateWithHTTPs(
 
       core.info(`${config.logPrefix} Found ${filesToValidate.length} file(s) to validate:`);
       for (const file of filesToValidate) {
-        core.info(`${config.logPrefix} - ${file.filePath} (${file.status})`);
+        core.info(`${config.logPrefix} - ${path.basename(file.filePath)} (${file.status})`);
       }
     } else {
       filesToValidate = files;
@@ -209,7 +209,7 @@ async function validateWithHTTPs(
     for (const file of filesToValidate) {
       const fileName = path.basename(file.filePath);
       validatedFiles.push(fileName);
-      core.info(`${config.logPrefix} Validating ${file.filePath}...`);
+      core.info(`${config.logPrefix} Validating ${fileName}...`);
       try {
         const result = await client.validatePowerOn(file.filePath);
         if (!result.isValid) {
@@ -299,7 +299,7 @@ async function validateWithSSH(
 
       core.info(`${config.logPrefix} Found ${filesToValidate.length} file(s) to validate:`);
       for (const file of filesToValidate) {
-        core.info(`${config.logPrefix} - ${file.filePath} (${file.status})`);
+        core.info(`${config.logPrefix} - ${path.basename(file.filePath)} (${file.status})`);
       }
     } else {
       filesToValidate = files;
@@ -315,7 +315,7 @@ async function validateWithSSH(
     for (const file of filesToValidate) {
       const fileName = path.basename(file.filePath);
       validatedFiles.push(fileName);
-      core.info(`${config.logPrefix} Validating ${file.filePath}...`);
+      core.info(`${config.logPrefix} Validating ${fileName}...`);
 
       try {
         const result = await worker.validatePowerOn(file.filePath);
@@ -374,7 +374,7 @@ export async function validatePowerOns(config: ValidationConfig): Promise<Valida
 
     core.info(`${config.logPrefix} Found ${files.length} file(s) to validate:`);
     for (const file of files) {
-      core.info(`${config.logPrefix} - ${file.filePath} (${file.status})`);
+      core.info(`${config.logPrefix} - ${path.basename(file.filePath)} (${file.status})`);
     }
 
     // Validate based on connection type
