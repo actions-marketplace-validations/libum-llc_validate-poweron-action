@@ -304,6 +304,12 @@ describe('validator', () => {
         return 0;
       });
 
+      // Mock file reads: only FILE1.PO has valid PowerOn content
+      (fs.promises.readFile as jest.Mock)
+        .mockResolvedValueOnce(VALID_SPECFILE) // FILE1.PO - valid
+        .mockResolvedValueOnce('# README') // README.md - missing TARGET/PRINT TITLE
+        .mockResolvedValueOnce('{"config": true}'); // config.json - missing TARGET/PRINT TITLE
+
       const config = { ...baseConfig, targetBranch: 'origin/main' };
       const result = await validatePowerOns(config);
 
@@ -321,7 +327,7 @@ describe('validator', () => {
       const mockSSHClient = {
         isReady: Promise.resolve(),
         getChangedFiles: jest.fn().mockResolvedValue({
-          deployed: ['REPWRITERSPECS/TEST.PO'],
+          deployed: ['TEST.PO'], // Paths relative to the directory passed to getChangedFiles
           deleted: [],
         }),
         createValidateWorker: jest.fn().mockResolvedValue(mockWorker),
@@ -387,7 +393,7 @@ describe('validator', () => {
     it('should create HTTPs client and validate files', async () => {
       const mockHTTPsClient = {
         getChangedFiles: jest.fn().mockResolvedValue({
-          deployed: ['REPWRITERSPECS/TEST.PO'],
+          deployed: ['TEST.PO'], // Paths relative to the directory passed to getChangedFiles
           deleted: [],
         }),
         validatePowerOn: jest.fn().mockResolvedValue({ isValid: true, errors: [] }),
