@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as path from 'path';
-import { SymitarHTTPs, SymitarSSH, isPowerOnFile, getSkipReasonForFile } from '@libum-llc/symitar';
+import { SymitarHTTPs, SymitarSSH, getSkipReasonForFile } from '@libum-llc/symitar';
 import { validateApiKey } from './subscription';
 
 export interface ValidationConfig {
@@ -112,13 +112,7 @@ async function getChangedFilesFromGit(
         continue;
       }
 
-      // Skip non-PowerOn files
-      if (!isPowerOnFile(filePath)) {
-        core.info(`${logPrefix} Skipping ${basename}. Not detected to be a PowerOn file.`);
-        continue;
-      }
-
-      // Check if this PowerOn file should be validated
+      // Check if this file should be validated (handles extension + content checks)
       const fullPath = path.isAbsolute(filePath)
         ? filePath
         : path.join(process.env.GITHUB_WORKSPACE || '', filePath);
@@ -179,7 +173,7 @@ async function validateWithHTTPs(
           continue;
         }
 
-        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(workspace, filePath);
+        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(localDirectory, filePath);
 
         const skipReason = await getSkipReasonForFile(fullPath);
         if (skipReason) {
@@ -282,7 +276,7 @@ async function validateWithSSH(
           continue;
         }
 
-        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(workspace, filePath);
+        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(localDirectory, filePath);
 
         const skipReason = await getSkipReasonForFile(fullPath);
         if (skipReason) {
