@@ -234,7 +234,7 @@ async function validateWithHTTPs(
       validatedFiles,
     };
   } finally {
-    client.end(); // Guarantee cleanup
+    await client.end(); // Guarantee cleanup
   }
 }
 
