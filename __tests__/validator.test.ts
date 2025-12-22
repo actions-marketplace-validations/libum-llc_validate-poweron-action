@@ -82,6 +82,7 @@ describe('validator', () => {
     poweronDirectory: 'REPWRITERSPECS/',
     ignoreList: [],
     logPrefix: '[Test]',
+    syncMethod: 'sftp',
   };
 
   describe('getChangedFiles - no target branch (uses client.getChangedFiles)', () => {

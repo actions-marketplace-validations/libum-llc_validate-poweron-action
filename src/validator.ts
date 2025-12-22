@@ -1,7 +1,12 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as path from 'path';
-import { SymitarHTTPs, SymitarSSH, getSkipReasonForFile } from '@libum-llc/symitar';
+import {
+  SymitarHTTPs,
+  SymitarSSH,
+  SymitarSyncTransport,
+  getSkipReasonForFile,
+} from '@libum-llc/symitar';
 import { validateApiKey } from './subscription';
 
 export interface ValidationConfig {
@@ -20,6 +25,7 @@ export interface ValidationConfig {
   ignoreList: string[];
   logPrefix: string;
   debug?: boolean;
+  syncMethod?: 'rsync' | 'sftp';
 }
 
 export interface ValidationResult {
@@ -163,7 +169,11 @@ async function validateWithHTTPs(
       );
       const workspace = process.env.GITHUB_WORKSPACE || '';
       const localDirectory = path.join(workspace, config.poweronDirectory);
-      const changedPowerOns = await client.getChangedFiles(localDirectory);
+      const transport =
+        config.syncMethod === 'rsync' ? SymitarSyncTransport.RSYNC : SymitarSyncTransport.SFTP;
+      const changedPowerOns = await client.getChangedFiles(localDirectory, undefined, undefined, {
+        transport,
+      });
 
       filesToValidate = [];
       for (const filePath of changedPowerOns.deployed) {
@@ -268,7 +278,15 @@ async function validateWithSSH(
       );
       const workspace = process.env.GITHUB_WORKSPACE || '';
       const localDirectory = path.join(workspace, config.poweronDirectory);
-      const changedPowerOns = await client.getChangedFiles(symitarConfig, localDirectory);
+      const transport =
+        config.syncMethod === 'rsync' ? SymitarSyncTransport.RSYNC : SymitarSyncTransport.SFTP;
+      const changedPowerOns = await client.getChangedFiles(
+        symitarConfig,
+        localDirectory,
+        undefined,
+        undefined,
+        { transport },
+      );
 
       filesToValidate = [];
       for (const filePath of changedPowerOns.deployed) {

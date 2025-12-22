@@ -67,6 +67,11 @@ inputs:
     required: false
     default: 'false'
 
+  sync-method:
+    description: 'Synchronization method: "rsync" or "sftp" (default: sftp)'
+    required: false
+    default: 'sftp'
+
 outputs:
   files-validated:
     description: 'Number of PowerOn files validated'
