@@ -67,6 +67,11 @@ inputs:
     required: false
     default: 'false'
 
+  sync-method:
+    description: 'Transport method for file synchronization when no target-branch is provided: "rsync" or "sftp" (default: sftp)'
+    required: false
+    default: 'sftp'
+
 outputs:
   files-validated:
     description: 'Number of PowerOn files validated'

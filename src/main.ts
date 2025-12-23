@@ -24,6 +24,7 @@ async function run(): Promise<void> {
     const targetBranch = core.getInput('target-branch', { required: false });
     const validateIgnore = core.getInput('validate-ignore', { required: false }) || '';
     const debug = core.getInput('debug', { required: false }) === 'true';
+    const syncMethod = core.getInput('sync-method', { required: false }) || 'sftp';
 
     // Mask sensitive information
     core.setSecret(apiKey);
@@ -33,6 +34,11 @@ async function run(): Promise<void> {
     // Validate connection type
     if (connectionType !== 'https' && connectionType !== 'ssh') {
       throw new Error(`Invalid connection type: ${connectionType}. Must be "https" or "ssh"`);
+    }
+
+    // Validate sync method
+    if (syncMethod !== 'rsync' && syncMethod !== 'sftp') {
+      throw new Error(`Invalid sync method: ${syncMethod}. Must be "rsync" or "sftp"`);
     }
 
     // Validate hostname format
@@ -67,6 +73,7 @@ async function run(): Promise<void> {
 
     core.info(`${logPrefix} Starting PowerOn validation (v${version})`);
     core.info(`${logPrefix} Connection Type: ${connectionType.toUpperCase()}`);
+    core.info(`${logPrefix} Sync Method: ${syncMethod.toUpperCase()}`);
     core.info(`${logPrefix} Hostname: ${symitarHostname}`);
     core.info(`${logPrefix} Sym: ${symNumber}`);
     core.info(`${logPrefix} Directory: ${poweronDirectory}`);
@@ -106,6 +113,7 @@ async function run(): Promise<void> {
       ignoreList,
       logPrefix,
       debug,
+      syncMethod: syncMethod as 'rsync' | 'sftp',
     });
 
     // Set outputs
