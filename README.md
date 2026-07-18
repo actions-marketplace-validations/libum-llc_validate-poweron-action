@@ -14,6 +14,8 @@ ___
   - [Using HTTPS Connection](#using-https-connection)
   - [Validate All Files (No Target Branch)](#validate-all-files-no-target-branch)
   - [Ignoring Specific Files](#ignoring-specific-files)
+  - [Preserving Server-Managed Files](#preserving-server-managed-files)
+- [List Inputs](#list-inputs)
 - [Customizing](#customizing)
   - [Inputs](#inputs)
   - [Secrets](#secrets)
@@ -100,7 +102,50 @@ jobs:
     ssh-password: ${{ secrets.SSH_PASSWORD }}
     api-key: ${{ secrets.API_KEY }}
     target-branch: origin/main
-    validate-ignore: TEST.PO,DEPRECATED.PO,EXAMPLE.PO
+    validate-ignore: |
+      - TEST.PO
+      - DEPRECATED.PO
+      - EXAMPLE.PO
+```
+
+### Preserving Server-Managed Files
+
+Use `preserve-server-files` for files that are generated or forcibly updated by the server. Matched files are skipped during validation so pull requests do not validate repository copies that should be preserved from the Symitar server.
+
+```yaml
+- name: Validate PowerOn files (preserve server-managed files)
+  uses: libum-llc/validate-poweron-action@v1
+  with:
+    symitar-hostname: 93.455.43.232
+    sym-number: 627
+    symitar-user-number: 1995
+    symitar-user-password: ${{ secrets.SYMITAR_USER_PASSWORD }}
+    ssh-username: libum
+    ssh-password: ${{ secrets.SSH_PASSWORD }}
+    api-key: ${{ secrets.API_KEY }}
+    target-branch: origin/main
+    preserve-server-files: |
+      - RD.*
+      - PFR.*
+```
+
+## List Inputs
+
+`validate-ignore` and `preserve-server-files` accept either a comma-delimited string or a YAML list (one item per line, optionally `- ` prefixed). YAML list form is recommended when you have more than a handful of entries — it stays readable as the list grows.
+
+```yaml
+# Comma-delimited (good for short lists)
+validate-ignore: TEST.PO, DEPRECATED.PO
+
+# Multi-line (one item per line)
+validate-ignore: |
+  TEST.PO
+  DEPRECATED.PO
+
+# YAML block-sequence (mirrors poweron.yml conventions)
+validate-ignore: |
+  - TEST.PO
+  - DEPRECATED.PO
 ```
 
 ## Customizing
@@ -121,7 +166,8 @@ jobs:
 | `connection-type` | Connection type: "https" or "ssh" | No | `ssh` |
 | `poweron-directory` | The directory in the repository to monitor PowerOn changes in | No | `REPWRITERSPECS/` |
 | `target-branch` | Target branch to compare against for changed files (e.g., origin/main) | No | - |
-| `validate-ignore` | Comma-separated list of PowerOn filenames to ignore during validation | No | `''` |
+| `validate-ignore` | List of PowerOn filenames to ignore during validation. Accepts comma-delimited or YAML list — see [List Inputs](#list-inputs). | No | `''` |
+| `preserve-server-files` | List of exact filenames or glob patterns to skip during validation because the server copy is preserved. Accepts comma-delimited or YAML list — see [List Inputs](#list-inputs). | No | `''` |
 | `debug` | Enable debug logging for Symitar clients | No | `false` |
 | `sync-method` | Transport method for file synchronization when no target-branch is provided: "rsync" or "sftp" | No | `sftp` |
 

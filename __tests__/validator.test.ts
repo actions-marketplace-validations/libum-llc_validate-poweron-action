@@ -105,7 +105,17 @@ describe('validator', () => {
 
       const result = await validatePowerOns(baseConfig);
 
-      expect(mockSSHClient.getChangedFiles).toHaveBeenCalled();
+      expect(mockSSHClient.getChangedFiles).toHaveBeenCalledWith(
+        {
+          symNumber: 1,
+          symitarUserNumber: '1234',
+          symitarUserPassword: 'password',
+        },
+        expect.stringMatching(/REPWRITERSPECS[\\/]$/),
+        undefined,
+        undefined,
+        { transport: 'sftp', compareMode: 'quick' },
+      );
       expect(result.filesValidated).toBe(2);
     });
 
@@ -130,6 +140,39 @@ describe('validator', () => {
       const result = await validatePowerOns(config);
 
       expect(result.filesValidated).toBe(1);
+    });
+
+    it('should skip RD and PFR preserved server files when no target branch specified', async () => {
+      const mockWorker = {
+        validatePowerOn: jest.fn().mockResolvedValue({ isValid: true, errors: [] }),
+      };
+      const mockSSHClient = {
+        isReady: Promise.resolve(),
+        getChangedFiles: jest.fn().mockResolvedValue({
+          deployed: [
+            'REPWRITERSPECS/FILE1.PO',
+            'REPWRITERSPECS/RD.ACCOUNT.DEFAULTS',
+            'REPWRITERSPECS/PFR.SYSTEM.DEFAULTS',
+          ],
+          deleted: [],
+        }),
+        createValidateWorker: jest.fn().mockResolvedValue(mockWorker),
+        end: jest.fn().mockResolvedValue(undefined),
+      };
+      (SymitarSSH as jest.MockedClass<typeof SymitarSSH>).mockImplementation(
+        () => mockSSHClient as any,
+      );
+
+      const result = await validatePowerOns({
+        ...baseConfig,
+        preserveServerFiles: ['RD.*', 'PFR.*'],
+      });
+
+      expect(result.filesValidated).toBe(1);
+      expect(mockWorker.validatePowerOn).toHaveBeenCalledWith(
+        expect.stringMatching(/REPWRITERSPECS[\\/]FILE1\.PO$/),
+        expect.any(Object),
+      );
     });
 
     it('should skip .DEF, .PRO, .SET, .FMP, and .SUB files from validation', async () => {
@@ -273,6 +316,27 @@ describe('validator', () => {
       expect(result.filesValidated).toBe(1);
     });
 
+    it('should skip RD and PFR preserved server files when using target branch', async () => {
+      const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
+      mockExec.mockImplementation(async (cmd, args, options) => {
+        if (cmd === 'git' && options?.listeners?.stdout) {
+          const gitOutput =
+            'M\tREPWRITERSPECS/FILE1.PO\nM\tREPWRITERSPECS/RD.ACCOUNT.DEFAULTS\nM\tREPWRITERSPECS/PFR.SYSTEM.DEFAULTS\n';
+          options.listeners.stdout(Buffer.from(gitOutput));
+        }
+        return 0;
+      });
+
+      const config = {
+        ...baseConfig,
+        targetBranch: 'origin/main',
+        preserveServerFiles: ['RD.*', 'PFR.*'],
+      };
+      const result = await validatePowerOns(config);
+
+      expect(result.filesValidated).toBe(1);
+    });
+
     it('should skip .DEF, .PRO, .SET, and .FMP files from validation with target branch', async () => {
       const mockExec = exec.exec as jest.MockedFunction<typeof exec.exec>;
       mockExec.mockImplementation(async (cmd, args, options) => {
@@ -356,7 +420,8 @@ describe('validator', () => {
         symitarUserPassword: 'password',
       });
       expect(mockWorker.validatePowerOn).toHaveBeenCalledWith(
-        expect.stringMatching(/REPWRITERSPECS\/TEST\.PO$/),
+        expect.stringMatching(/REPWRITERSPECS[\\/]TEST\.PO$/),
+        { localIncludeDir: expect.stringMatching(/REPWRITERSPECS[\\/]$/) },
       );
       expect(mockSSHClient.end).toHaveBeenCalled();
       expect(result.filesPassed).toBe(1);
@@ -424,8 +489,15 @@ describe('validator', () => {
           password: 'sshpass',
         },
       );
+      expect(mockHTTPsClient.getChangedFiles).toHaveBeenCalledWith(
+        expect.stringMatching(/REPWRITERSPECS[\\/]$/),
+        undefined,
+        undefined,
+        { transport: 'sftp', compareMode: 'quick' },
+      );
       expect(mockHTTPsClient.validatePowerOn).toHaveBeenCalledWith(
-        expect.stringMatching(/REPWRITERSPECS\/TEST\.PO$/),
+        expect.stringMatching(/REPWRITERSPECS[\\/]TEST\.PO$/),
+        { localIncludeDir: expect.stringMatching(/REPWRITERSPECS[\\/]$/) },
       );
       expect(mockHTTPsClient.end).toHaveBeenCalled();
       expect(result.filesPassed).toBe(1);

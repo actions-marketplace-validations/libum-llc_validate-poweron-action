@@ -23,6 +23,7 @@ export interface ValidationConfig {
   poweronDirectory: string;
   targetBranch?: string;
   ignoreList: string[];
+  preserveServerFiles?: string[];
   logPrefix: string;
   debug?: boolean;
   syncMethod?: 'rsync' | 'sftp';
@@ -41,10 +42,56 @@ interface ChangedFile {
   status: string;
 }
 
+function getLocalPowerOnDirectory(config: ValidationConfig): string {
+  return path.join(process.env.GITHUB_WORKSPACE || '', config.poweronDirectory);
+}
+
+function resolveLocalPowerOnPath(
+  config: ValidationConfig,
+  localDirectory: string,
+  filePath: string,
+): string {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
+  }
+
+  const normalizedFilePath = filePath.replace(/\\/g, '/');
+  const normalizedPowerOnDirectory = config.poweronDirectory
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+
+  if (
+    normalizedFilePath === normalizedPowerOnDirectory ||
+    normalizedFilePath.startsWith(`${normalizedPowerOnDirectory}/`)
+  ) {
+    return path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+  }
+
+  return path.join(localDirectory, filePath);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+
+function patternToRegExp(pattern: string): RegExp {
+  const source = pattern
+    .split('*')
+    .map((part) => part.split('?').map(escapeRegExp).join('.'))
+    .join('.*');
+
+  return new RegExp(`^${source}$`, 'i');
+}
+
+function matchesAnyPattern(fileName: string, patterns: string[] = []): boolean {
+  return patterns.some((pattern) => patternToRegExp(pattern).test(fileName));
+}
+
 async function getChangedFilesFromGit(
   targetBranch: string,
   poweronDirectory: string,
   ignoreList: string[],
+  preserveServerFiles: string[],
   logPrefix: string,
 ): Promise<ChangedFile[]> {
   // Ensure we're running in the workspace directory
@@ -118,6 +165,11 @@ async function getChangedFilesFromGit(
         continue;
       }
 
+      if (matchesAnyPattern(basename, preserveServerFiles)) {
+        core.info(`${logPrefix} Skipping ${basename}. File is preserved from server.`);
+        continue;
+      }
+
       // Check if this file should be validated (handles extension + content checks)
       const fullPath = path.isAbsolute(filePath)
         ? filePath
@@ -167,12 +219,12 @@ async function validateWithHTTPs(
       core.info(
         `${config.logPrefix} Comparing local files with Sym ${config.symNumber} on ${config.symitarHostname}...`,
       );
-      const workspace = process.env.GITHUB_WORKSPACE || '';
-      const localDirectory = path.join(workspace, config.poweronDirectory);
+      const localDirectory = getLocalPowerOnDirectory(config);
       const transport =
         config.syncMethod === 'rsync' ? SymitarSyncTransport.RSYNC : SymitarSyncTransport.SFTP;
       const changedPowerOns = await client.getChangedFiles(localDirectory, undefined, undefined, {
         transport,
+        compareMode: 'quick',
       });
 
       filesToValidate = [];
@@ -185,7 +237,12 @@ async function validateWithHTTPs(
           continue;
         }
 
-        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(localDirectory, filePath);
+        if (matchesAnyPattern(basename, config.preserveServerFiles)) {
+          core.info(`${config.logPrefix} Skipping ${basename}. File is preserved from server.`);
+          continue;
+        }
+
+        const fullPath = resolveLocalPowerOnPath(config, localDirectory, filePath);
 
         const skipReason = await getSkipReasonForFile(fullPath);
         if (skipReason) {
@@ -223,7 +280,9 @@ async function validateWithHTTPs(
       validatedFiles.push(fileName);
       core.info(`${config.logPrefix} Validating ${fileName}...`);
       try {
-        const result = await client.validatePowerOn(file.filePath);
+        const result = await client.validatePowerOn(file.filePath, {
+          localIncludeDir: getLocalPowerOnDirectory(config),
+        });
         if (!result.isValid) {
           filesFailed++;
           const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
@@ -276,8 +335,7 @@ async function validateWithSSH(
       core.info(
         `${config.logPrefix} Comparing local files with Sym ${config.symNumber} on ${config.symitarHostname}...`,
       );
-      const workspace = process.env.GITHUB_WORKSPACE || '';
-      const localDirectory = path.join(workspace, config.poweronDirectory);
+      const localDirectory = getLocalPowerOnDirectory(config);
       const transport =
         config.syncMethod === 'rsync' ? SymitarSyncTransport.RSYNC : SymitarSyncTransport.SFTP;
       const changedPowerOns = await client.getChangedFiles(
@@ -285,7 +343,7 @@ async function validateWithSSH(
         localDirectory,
         undefined,
         undefined,
-        { transport },
+        { transport, compareMode: 'quick' },
       );
 
       filesToValidate = [];
@@ -298,7 +356,12 @@ async function validateWithSSH(
           continue;
         }
 
-        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(localDirectory, filePath);
+        if (matchesAnyPattern(basename, config.preserveServerFiles)) {
+          core.info(`${config.logPrefix} Skipping ${basename}. File is preserved from server.`);
+          continue;
+        }
+
+        const fullPath = resolveLocalPowerOnPath(config, localDirectory, filePath);
 
         const skipReason = await getSkipReasonForFile(fullPath);
         if (skipReason) {
@@ -340,7 +403,9 @@ async function validateWithSSH(
       core.info(`${config.logPrefix} Validating ${fileName}...`);
 
       try {
-        const result = await worker.validatePowerOn(file.filePath);
+        const result = await worker.validatePowerOn(file.filePath, {
+          localIncludeDir: getLocalPowerOnDirectory(config),
+        });
         if (!result.isValid) {
           filesFailed++;
           const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
@@ -378,6 +443,7 @@ export async function validatePowerOns(config: ValidationConfig): Promise<Valida
       config.targetBranch,
       config.poweronDirectory,
       config.ignoreList,
+      config.preserveServerFiles || [],
       config.logPrefix,
     );
 

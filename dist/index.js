@@ -4374,7 +4374,7 @@ module.exports = diagnostics;
 
 /***/ }),
 
-/***/ 87552:
+/***/ 59723:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4383,53 +4383,80 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.deployFile = void 0;
+exports.deployFiles = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
-const helpers_1 = __nccwpck_require__(73878);
-const types_1 = __nccwpck_require__(27118);
+const helpers_1 = __nccwpck_require__(56177);
+const types_1 = __nccwpck_require__(19233);
 const appServerToFileType = {
     [types_1.SymitarAppServerFileType.POWERON]: types_1.SymitarFileType.POWERON,
     [types_1.SymitarAppServerFileType.DATAFILE]: types_1.SymitarFileType.DATAFILE,
     [types_1.SymitarAppServerFileType.HELPFILE]: types_1.SymitarFileType.HELPFILE,
     [types_1.SymitarAppServerFileType.LETTERFILE]: types_1.SymitarFileType.LETTERFILE,
 };
-const deployFile = async (client, sshClient, config, type, localFilePath, remoteFileName, logger, logPrefix) => {
-    if (type !== types_1.SymitarAppServerFileType.POWERON) {
+const deployFiles = async (client, sshClient, config, type, files, logger, logPrefix, forceSSH = false) => {
+    if (files.length === 0) {
+        return [];
+    }
+    if (type !== types_1.SymitarAppServerFileType.POWERON || forceSSH) {
         if (!sshClient) {
-            throw new Error(`Unable to deploy ${type} file without SSH client. SSH configuration is required for DATAFILE, HELPFILE, and LETTERFILE types.`);
+            throw new Error(`Unable to deploy ${type} files without SSH client. SSH configuration is required.`);
         }
         await sshClient.isReady;
         const fileType = appServerToFileType[type];
-        const fileName = remoteFileName || path_1.default.basename(localFilePath);
-        logger?.info(`${logPrefix} Deploying ${fileName} to ${fileType}/ in Sym ${config.symNumber} via SSH...`);
+        logger?.info(`${logPrefix} Deploying ${files.length} file(s) to ${fileType}/ in Sym ${config.symNumber} via SSH...`);
         const transferWorker = await sshClient.createTransferWorker(config);
-        await transferWorker.deployFile(fileType, localFilePath, remoteFileName);
-        return true;
+        try {
+            return await transferWorker.deployFiles(fileType, files);
+        }
+        finally {
+            try {
+                transferWorker.end();
+            }
+            catch (cleanupError) {
+                logger?.warn(`${logPrefix} Failed to close transfer worker after deploying ${type}: ${cleanupError.message}`);
+            }
+        }
     }
-    const body = await (0, helpers_1.convertFileToBinary)(localFilePath);
-    const fileName = remoteFileName || path_1.default.basename(localFilePath);
-    logger?.info(`${logPrefix} Deploying ${fileName} via SymAppServer...`);
-    const response = await client.post('/root/invoke', body, {
-        headers: {
-            'Content-Length': body.length.toString(),
-            action: types_1.SymitarAppServerAction.FILE_DEPLOY,
-            poweronName: fileName,
-            type,
-            install: 'false',
-        },
-    });
-    logger?.debug(`${logPrefix} Deploy response status: ${response?.status}, data: ${JSON.stringify(response?.data)}`);
-    if (!response || response.status !== 200 || !response.data) {
-        throw new Error('Unable to deploy file to Symitar');
+    if (!client) {
+        throw new Error('Unable to deploy PowerOn files without HTTPS client');
     }
-    return true;
+    logger?.info(`${logPrefix} Deploying ${files.length} PowerOn file(s) via SymAppServer...`);
+    const results = await Promise.all(files.map(async (file) => {
+        const fileName = file.remoteFileName || path_1.default.basename(file.localFilePath);
+        try {
+            logger?.info(`${logPrefix} Deploying ${fileName}...`);
+            const body = await (0, helpers_1.convertFileToBinary)(file.localFilePath);
+            const response = await client.post('/root/invoke', body, {
+                headers: {
+                    'Content-Length': body.length.toString(),
+                    action: types_1.SymitarAppServerAction.FILE_DEPLOY,
+                    poweronName: fileName,
+                    type,
+                    install: 'false',
+                },
+            });
+            if (!response || response.status !== 200 || !response.data) {
+                throw new Error('Invalid response from SymAppServer');
+            }
+            logger?.info(`${logPrefix} Successfully deployed ${fileName}`);
+            return { fileName, success: true };
+        }
+        catch (error) {
+            const errorMessage = error?.message || String(error);
+            logger?.error(`${logPrefix} Failed to deploy ${fileName}: ${errorMessage}`);
+            return { fileName, success: false, error: errorMessage };
+        }
+    }));
+    const successCount = results.filter((r) => r.success).length;
+    logger?.info(`${logPrefix} Deployed ${successCount}/${files.length} PowerOn file(s) via SymAppServer`);
+    return results;
 };
-exports.deployFile = deployFile;
+exports.deployFiles = deployFiles;
 //# sourceMappingURL=https.deploy.js.map
 
 /***/ }),
 
-/***/ 43311:
+/***/ 63000:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4442,7 +4469,7 @@ exports.downloadFile = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs_1 = __importDefault(__nccwpck_require__(79896));
 const os_1 = __importDefault(__nccwpck_require__(70857));
-const types_1 = __nccwpck_require__(27118);
+const types_1 = __nccwpck_require__(19233);
 const appServerToFileType = {
     [types_1.SymitarAppServerFileType.POWERON]: types_1.SymitarFileType.POWERON,
     [types_1.SymitarAppServerFileType.DATAFILE]: types_1.SymitarFileType.DATAFILE,
@@ -4460,13 +4487,20 @@ const downloadFile = async (client, sshClient, config, type, localFilePath, logg
         logger?.info(`${logPrefix} Downloading ${fileName} from ${fileType}/ in Sym ${config.symNumber} via SSH...`);
         const tempDir = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'symitar-'));
         const tempFilePath = path_1.default.join(tempDir, fileName);
+        let transferWorker;
         try {
-            const transferWorker = await sshClient.createTransferWorker(config);
+            transferWorker = await sshClient.createTransferWorker(config);
             await transferWorker.downloadFile(fileType, fileName, tempDir);
             const content = fs_1.default.readFileSync(tempFilePath, 'utf8');
             return content;
         }
         finally {
+            try {
+                transferWorker?.end();
+            }
+            catch (cleanupError) {
+                logger?.warn(`${logPrefix} Failed to close transfer worker for ${fileName}: ${cleanupError.message}`);
+            }
             if (fs_1.default.existsSync(tempFilePath)) {
                 fs_1.default.unlinkSync(tempFilePath);
             }
@@ -4497,18 +4531,26 @@ exports.downloadFile = downloadFile;
 
 /***/ }),
 
-/***/ 73012:
+/***/ 22197:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.executePowerOn = executePowerOn;
-const types_1 = __nccwpck_require__(27118);
+const axios_1 = __nccwpck_require__(11505);
+const types_1 = __nccwpck_require__(19233);
+const MAX_TIMEOUT_RETRIES = 10;
+const SYMITAR_ERROR_PATTERNS = [
+    /Error: Job Failed/i,
+    /Error:.*from Program:/i,
+    /specification file cannot be found/i,
+    /Error:.*limit exceeded/i,
+];
 async function executePowerOn(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, options) {
     return executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, undefined, undefined, options);
 }
-async function executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, transactionId, input, options) {
+async function executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, transactionId, input, options, timeoutRetryCount = 0) {
     const payload = {
         TaskManager_PowerOnInteractiveExecute: {
             sym: symNumber,
@@ -4538,39 +4580,56 @@ async function executeWithTransaction(client, symNumber, symitarUserNumber, symi
                 error: 'Invalid response from server',
             };
         }
-        if (result.status !== 'success' ||
-            result.output?.includes('Error: Job Failed')) {
+        const hasErrorInOutput = SYMITAR_ERROR_PATTERNS.some((pattern) => pattern.test(result.output || ''));
+        if (result.status !== 'success' || hasErrorInOutput) {
             const matches = result.output
                 ? [...result.output.matchAll(/"(\d+)"\s*,\s*"([^"]+)"/g)]
                 : [];
             const report = Object.fromEntries(matches.map(([, num, text]) => [num, text]));
+            const outputLines = result.output?.split('\n') || [];
+            const errorLine = outputLines.find((line) => SYMITAR_ERROR_PATTERNS.some((pattern) => pattern.test(line)));
             return {
                 success: false,
                 report,
-                error: result.message || 'Job failed',
+                error: errorLine?.trim() || result.message || 'Job failed',
             };
         }
         if (/in progress/i.test(result.message)) {
             const output = result.output?.split('\n') || [];
+            const fullOutput = result.output || '';
             const promptLines = [];
+            const hasBackspaceChars = fullOutput.includes('\x08');
             for (let i = 1; i < output.length - 1; i++) {
                 promptLines.push(output[i]);
             }
-            if (promptLines.length > 0 && result.transactionId) {
-                const promptText = output[output.length - 2]?.trim() || '';
-                const errorPatterns = [
-                    /specification file cannot be found/i,
-                    /error:/i,
-                    /failed/i,
-                ];
-                const isErrorPrompt = errorPatterns.some((pattern) => pattern.test(promptText));
-                if (isErrorPrompt) {
-                    return {
-                        success: false,
-                        report: {},
-                        error: promptText,
-                    };
-                }
+            let promptText = '';
+            const lastLine = output[output.length - 1] || '';
+            const isLastLineInputDecoration = lastLine.length > 0 &&
+                (hasBackspaceChars || /^:[_\s]+$/.test(lastLine.replace(/\x08/g, '')));
+            if (output.length === 2) {
+                promptText = output[1]?.trim() || '';
+                promptLines.push(output[1]);
+            }
+            else if (isLastLineInputDecoration && output.length >= 2) {
+                promptText = output[output.length - 2]?.trim() || '';
+            }
+            else {
+                promptText = output[output.length - 2]?.trim() || '';
+            }
+            const isErrorInOutput = SYMITAR_ERROR_PATTERNS.some((pattern) => pattern.test(fullOutput));
+            if (isErrorInOutput) {
+                const errorLine = output.find((line) => SYMITAR_ERROR_PATTERNS.some((pattern) => pattern.test(line))) || 'Job failed';
+                return {
+                    success: false,
+                    report: {},
+                    error: errorLine.trim(),
+                };
+            }
+            const promptEndsWithInputIndicator = /[:?]\s*$/.test(promptText);
+            const looksLikeInputPrompt = hasBackspaceChars || promptEndsWithInputIndicator;
+            if (promptLines.length > 0 &&
+                result.transactionId &&
+                looksLikeInputPrompt) {
                 const prompt = {
                     text: promptText,
                     context: promptLines,
@@ -4618,6 +4677,13 @@ async function executeWithTransaction(client, symNumber, symitarUserNumber, symi
         };
     }
     catch (error) {
+        const isTimeoutError = (error instanceof axios_1.AxiosError &&
+            (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT')) ||
+            (error instanceof Error && /timeout/i.test(error.message));
+        if (isTimeoutError && timeoutRetryCount < MAX_TIMEOUT_RETRIES) {
+            await sleep(1000);
+            return executeWithTransaction(client, symNumber, symitarUserNumber, symitarUserPassword, powerOnName, transactionId, input, options, timeoutRetryCount + 1);
+        }
         const message = error instanceof Error ? error.message : 'Unknown error occurred';
         return {
             success: false,
@@ -4633,7 +4699,7 @@ function sleep(ms) {
 
 /***/ }),
 
-/***/ 77208:
+/***/ 10985:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4644,9 +4710,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.installPowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
-const helpers_1 = __nccwpck_require__(73878);
-const types_1 = __nccwpck_require__(27118);
-const constants_1 = __nccwpck_require__(88922);
+const helpers_1 = __nccwpck_require__(56177);
+const types_1 = __nccwpck_require__(19233);
+const constants_1 = __nccwpck_require__(90857);
 const installPowerOn = async (client, localFilePath, logger, logPrefix) => {
     const body = await (0, helpers_1.convertFileToBinary)(localFilePath);
     const fileName = path_1.default.basename(localFilePath);
@@ -4672,13 +4738,14 @@ const installPowerOn = async (client, localFilePath, logger, logPrefix) => {
     if (taskManagerStatus === 'error' || response.data.message === 'error') {
         const match = taskManagerMessage?.match(constants_1.APP_SERVER_VALIDATE_PATTERN);
         logger?.debug(`${logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
-        const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, fileName);
+        const [isValid, errors, errorFileName] = (0, helpers_1.buildValidationResult)(match, fileName, fileName);
         if (!isValid) {
             logger?.info(`${logPrefix} Install failed for ${fileName}`);
             logger?.debug(`${logPrefix} Errors: ${errors}`);
             return {
                 isValid: false,
                 errors: errors ?? taskManagerMessage ?? 'Unknown error',
+                errorFileName,
             };
         }
     }
@@ -4690,7 +4757,7 @@ exports.installPowerOn = installPowerOn;
 
 /***/ }),
 
-/***/ 65601:
+/***/ 2144:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -4703,26 +4770,26 @@ exports.SymitarHTTPs = void 0;
 exports.createSymitarHTTPs = createSymitarHTTPs;
 exports.createSymitarHTTPsWithSSH = createSymitarHTTPsWithSSH;
 const https_1 = __importDefault(__nccwpck_require__(65692));
-const axios_1 = __importDefault(__nccwpck_require__(27455));
-const helpers_1 = __nccwpck_require__(73878);
-const interfaces_1 = __nccwpck_require__(72819);
-const logging_1 = __nccwpck_require__(6358);
-const ssh_1 = __nccwpck_require__(42493);
-const types_1 = __nccwpck_require__(27118);
-const https_deploy_1 = __nccwpck_require__(87552);
-const https_download_1 = __nccwpck_require__(43311);
-const https_install_1 = __nccwpck_require__(77208);
-const https_list_1 = __nccwpck_require__(15119);
-const https_remove_1 = __nccwpck_require__(94999);
-const https_synchronize_1 = __nccwpck_require__(18985);
-const https_validate_1 = __nccwpck_require__(1601);
-const https_uninstall_1 = __nccwpck_require__(30325);
-const https_execute_1 = __nccwpck_require__(73012);
-const https_reports_1 = __nccwpck_require__(9192);
-https_1.default.globalAgent.options.rejectUnauthorized = false;
+const axios_1 = __importDefault(__nccwpck_require__(11505));
+const helpers_1 = __nccwpck_require__(56177);
+const interfaces_1 = __nccwpck_require__(78006);
+const logging_1 = __nccwpck_require__(37533);
+const ssh_1 = __nccwpck_require__(8908);
+const types_1 = __nccwpck_require__(19233);
+const https_deploy_1 = __nccwpck_require__(59723);
+const https_download_1 = __nccwpck_require__(63000);
+const https_install_1 = __nccwpck_require__(10985);
+const https_list_1 = __nccwpck_require__(87844);
+const https_remove_1 = __nccwpck_require__(39856);
+const https_synchronize_1 = __nccwpck_require__(39260);
+const https_validate_1 = __nccwpck_require__(81090);
+const https_uninstall_1 = __nccwpck_require__(68832);
+const https_execute_1 = __nccwpck_require__(22197);
+const https_reports_1 = __nccwpck_require__(68465);
 const DEFAULT_REQUEST_TIMEOUT = 60000;
 class SymitarHTTPs extends interfaces_1.BaseSymitarClient {
     _client;
+    _httpsAgent;
     _sshClient = null;
     _logPrefix = '[SymitarHTTPs]';
     host;
@@ -4733,9 +4800,13 @@ class SymitarHTTPs extends interfaces_1.BaseSymitarClient {
         this.config = config;
         this.sshConfig = sshConfig;
         this.host = new URL(baseUrl).hostname;
+        this._httpsAgent = new https_1.default.Agent({
+            rejectUnauthorized: false,
+        });
         this._client = axios_1.default.create({
             baseURL: baseUrl,
             timeout: options?.timeout ?? DEFAULT_REQUEST_TIMEOUT,
+            httpsAgent: this._httpsAgent,
             headers: {
                 Accept: '*/*',
                 service: types_1.SymitarAppServerService.TASK_MANAGER,
@@ -4760,6 +4831,7 @@ class SymitarHTTPs extends interfaces_1.BaseSymitarClient {
         }
     }
     async end() {
+        this._httpsAgent.destroy();
         if (this._sshClient) {
             await this._sshClient.end();
         }
@@ -4779,9 +4851,6 @@ class SymitarHTTPs extends interfaces_1.BaseSymitarClient {
         }
         return this._sshClient.getChangedFiles(this.config, localDirectory, remoteDirectory, syncMode, options);
     }
-    async deployFile(type, localFilePath, remoteFileName) {
-        return (0, https_deploy_1.deployFile)(this._client, this._sshClient, this.config, type, localFilePath, remoteFileName, this._logger, this._logPrefix);
-    }
     async downloadFile(type, localFilePath) {
         return (0, https_download_1.downloadFile)(this._client, this._sshClient, this.config, type, localFilePath, this._logger, this._logPrefix);
     }
@@ -4794,8 +4863,11 @@ class SymitarHTTPs extends interfaces_1.BaseSymitarClient {
     async listFiles(directory) {
         return (0, https_list_1.listFiles)(this._client, this._sshClient, this.config, directory, this._logger, this._logPrefix);
     }
-    async removeFile(type, fileName) {
-        return (0, https_remove_1.removeFile)(this._sshClient, this.config, type, fileName, this._logger, this._logPrefix);
+    async removeFiles(type, fileNames) {
+        return (0, https_remove_1.removeFiles)(this._sshClient, this.config, type, fileNames, this._logger, this._logPrefix);
+    }
+    async deployFiles(type, files, forceSSH = false) {
+        return (0, https_deploy_1.deployFiles)(this._client, this._sshClient, this.config, type, files, this._logger, this._logPrefix, forceSSH);
     }
     async syncFiles(localDirectory, remoteDirectory, syncMode, options, isDryRun = true) {
         if (!this._sshClient) {
@@ -4853,15 +4925,15 @@ function createSymitarHTTPsWithSSH(baseUrl, config, sshClient, options) {
 
 /***/ }),
 
-/***/ 15119:
+/***/ 87844:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.listFiles = exports.listPowerOns = void 0;
-const types_1 = __nccwpck_require__(27118);
-const ssh_list_1 = __nccwpck_require__(46267);
+const types_1 = __nccwpck_require__(19233);
+const ssh_list_1 = __nccwpck_require__(39280);
 const listPowerOns = async (client, logger, logPrefix) => {
     const response = await client.post('/root/invoke', null, {
         headers: {
@@ -4892,36 +4964,50 @@ exports.listFiles = listFiles;
 
 /***/ }),
 
-/***/ 94999:
+/***/ 39856:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.removeFile = void 0;
-const removeFile = async (sshClient, config, type, fileName, logger, logPrefix) => {
+exports.removeFiles = void 0;
+const removeFiles = async (sshClient, config, type, fileNames, logger, logPrefix, options = {}) => {
     if (!sshClient) {
-        throw new Error('Unable to remove file without SSH client');
+        throw new Error('Unable to remove files without SSH client');
+    }
+    if (fileNames.length === 0) {
+        return [];
     }
     await sshClient.isReady;
-    logger.info(`${logPrefix} Removing ${fileName} from ${type}/ in Sym ${config.symNumber}...`);
+    logger.debug(`${logPrefix} Removing ${fileNames.length} file(s) from ${type}/ in Sym ${config.symNumber}...`);
+    let transferWorker;
     try {
-        const transferWorker = await sshClient.createTransferWorker({
+        transferWorker = await sshClient.createTransferWorker({
             ...config,
         });
-        await transferWorker.removeFile(type, fileName);
+        return await transferWorker.removeFiles(type, fileNames, options);
     }
     catch (error) {
-        logger.error(`${logPrefix} Failed to remove ${fileName} from ${type}/ in Sym ${config.symNumber}: ${error.message}`);
+        logger.error(`${logPrefix} Failed to remove files from ${type}/ in Sym ${config.symNumber}: ${error.message}`);
         throw error;
     }
+    finally {
+        if (transferWorker) {
+            try {
+                transferWorker.end();
+            }
+            catch (cleanupError) {
+                logger.warn(`${logPrefix} Error closing transfer worker after removing files from ${type}/ in Sym ${config.symNumber}: ${cleanupError.message}`);
+            }
+        }
+    }
 };
-exports.removeFile = removeFile;
+exports.removeFiles = removeFiles;
 //# sourceMappingURL=https.remove.js.map
 
 /***/ }),
 
-/***/ 9192:
+/***/ 68465:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -4946,20 +5032,20 @@ async function waitForBatchSequences(sshClient, config, title, timeoutSeconds, l
 
 /***/ }),
 
-/***/ 18985:
+/***/ 39260:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.syncFiles = void 0;
-const types_1 = __nccwpck_require__(27118);
-const helpers_1 = __nccwpck_require__(73878);
-const sftp_sync_1 = __nccwpck_require__(56312);
-const sync_orchestrator_1 = __nccwpck_require__(76453);
-const https_validate_1 = __nccwpck_require__(1601);
-const https_install_1 = __nccwpck_require__(77208);
-const https_uninstall_1 = __nccwpck_require__(30325);
+const types_1 = __nccwpck_require__(19233);
+const helpers_1 = __nccwpck_require__(56177);
+const sftp_sync_1 = __nccwpck_require__(7371);
+const sync_orchestrator_1 = __nccwpck_require__(75110);
+const https_validate_1 = __nccwpck_require__(81090);
+const https_install_1 = __nccwpck_require__(10985);
+const https_uninstall_1 = __nccwpck_require__(68832);
 async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, remoteDirectory, syncMode, isDryRun, options, logger, deployed, deleted) {
     const transport = options.transport || types_1.SymitarSyncTransport.RSYNC;
     if (isDryRun) {
@@ -4967,6 +5053,7 @@ async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, re
             synced: deployed,
             deleted,
             skipped: [],
+            outliers: [],
             errors: [],
         };
     }
@@ -4984,6 +5071,9 @@ async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, re
                 syncMode,
                 concurrency: options.concurrency,
                 onProgress: options.onProgress,
+                preserveServerFiles: options.preserveServerFiles,
+                pullPreservedOnly: options.pullPreservedOnly,
+                compareMode: options.compareMode,
             }, false, logger);
         }
         finally {
@@ -4998,11 +5088,15 @@ async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, re
         localDirectory,
         remoteDirectory,
         syncMode,
+        preserveServerFiles: options.preserveServerFiles,
+        pullPreservedOnly: options.pullPreservedOnly,
+        compareMode: options.compareMode,
     }, false);
     return {
         synced: deployed,
         deleted,
         skipped: [],
+        outliers: [],
         errors: [],
     };
 }
@@ -5014,7 +5108,11 @@ const syncFiles = async (client, sshClient, sshConfig, config, localDirectory, r
     const operations = {
         getChangedFiles: () => sshClient.getChangedFiles(config, localDirectory, remoteDirectory, syncMode, options),
         validatePowerOn: async (filePath) => {
-            const result = await (0, https_validate_1.validatePowerOn)(client, sshClient, config, filePath, { isOffline: true, install: false }, logger, logPrefix);
+            const result = await (0, https_validate_1.validatePowerOn)(client, sshClient, config, filePath, {
+                isOffline: true,
+                install: false,
+                localIncludeDir: localDirectory,
+            }, logger, logPrefix);
             return { isValid: result.isValid, errors: result.errors };
         },
         executeSync: (deployed, deleted) => executeSyncTransport(sshConfig, config, localDirectory, remoteDirectory, syncMode, isDryRun, options, logger, deployed, deleted),
@@ -5041,7 +5139,7 @@ exports.syncFiles = syncFiles;
 
 /***/ }),
 
-/***/ 30325:
+/***/ 68832:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -5054,8 +5152,9 @@ const uninstallPowerOn = async (sshClient, config, powerOnName, logger, logPrefi
     }
     await sshClient.isReady;
     logger.info(`${logPrefix} Uninstalling ${powerOnName} in Sym ${config.symNumber}...`);
+    let uninstallWorker;
     try {
-        const uninstallWorker = await sshClient.createUninstallWorker(config);
+        uninstallWorker = await sshClient.createUninstallWorker(config);
         await uninstallWorker.isReady();
         await uninstallWorker.uninstallPowerOn(powerOnName);
         logger.info(`${logPrefix} Successfully uninstalled ${powerOnName} in Sym ${config.symNumber}`);
@@ -5064,81 +5163,210 @@ const uninstallPowerOn = async (sshClient, config, powerOnName, logger, logPrefi
         logger.error(`${logPrefix} Failed to uninstall ${powerOnName} in Sym ${config.symNumber}: ${error.message}`);
         throw error;
     }
+    finally {
+        try {
+            uninstallWorker?.end();
+        }
+        catch (cleanupError) {
+            logger.warn(`${logPrefix} Failed to close uninstall worker for ${powerOnName}: ${cleanupError.message}`);
+        }
+    }
 };
 exports.uninstallPowerOn = uninstallPowerOn;
 //# sourceMappingURL=https.uninstall.js.map
 
 /***/ }),
 
-/***/ 1601:
+/***/ 81090:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.validatePowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
-const helpers_1 = __nccwpck_require__(73878);
-const types_1 = __nccwpck_require__(27118);
-const constants_1 = __nccwpck_require__(88922);
-const https_remove_1 = __nccwpck_require__(94999);
+const fs = __importStar(__nccwpck_require__(79896));
+const helpers_1 = __nccwpck_require__(56177);
+const types_1 = __nccwpck_require__(19233);
+const constants_1 = __nccwpck_require__(90857);
+const line_endings_1 = __nccwpck_require__(74689);
+const https_remove_1 = __nccwpck_require__(39856);
+function getTaskManagerStatus(data) {
+    return data?.['TaskManager_PowerOnValidateAndInstall']?.['status'];
+}
+function getTaskManagerMessage(data) {
+    return data?.['TaskManager_PowerOnValidateAndInstall']?.['message'];
+}
+function getUploadFailureMessage(data) {
+    return getTaskManagerMessage(data) ?? data?.message ?? 'unknown error';
+}
 const validatePowerOn = async (client, sshClient, config, localFilePath, options, logger, logPrefix) => {
     const install = options.install ?? false;
     const isOffline = install ? false : (options.isOffline ?? true);
+    const hasLocalIncludeOpts = options.localIncludes !== undefined ||
+        options.localIncludeDir !== undefined;
     if (isOffline && !sshClient) {
         throw new Error('Unable to validate PowerOn without SSH client');
     }
-    await sshClient.isReady;
-    const powerOnName = path_1.default.basename(localFilePath);
-    const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
-    logger.info(`${logPrefix} Validating PowerOn: ${powerOnName}`);
-    logger.info(`${logPrefix} Uploading and validating PowerOn (${fileName}) in Sym ${config.symNumber}`);
-    const body = await (0, helpers_1.convertFileToBinary)(localFilePath);
-    const response = await client.post('/root/invoke', body, {
-        headers: {
-            'Content-Length': body.length.toString(),
-            action: types_1.SymitarAppServerAction.POWERON_VALIDATE,
-            poweronName: fileName,
-            type: types_1.SymitarAppServerFileType.POWERON,
-            install: install ? 'true' : 'false',
-            validatePowerOn: 'true',
-        },
+    if (hasLocalIncludeOpts && !sshClient) {
+        throw new Error('Unable to validate PowerOn with local includes without SSH client');
+    }
+    if (sshClient) {
+        await sshClient.isReady;
+    }
+    const entryOriginalName = options.originalFileName ?? path_1.default.basename(localFilePath);
+    const entryTempName = isOffline
+        ? (0, helpers_1.generateRandomPowerOnName)()
+        : entryOriginalName;
+    logger.debug(`${logPrefix} Validating PowerOn: ${entryOriginalName}`);
+    logger.debug(`${logPrefix} Uploading and validating PowerOn (${entryTempName}) in Sym ${config.symNumber}`);
+    const data = await fs.promises.readFile(localFilePath, 'utf8');
+    const lfData = (0, line_endings_1.normalizeStringLineEndings)(data);
+    const resolution = await (0, helpers_1.resolveLocalIncludes)({
+        entryFilePath: localFilePath,
+        entryContent: lfData,
+        entryTempName,
+        entryOriginalName,
+        localIncludes: options.localIncludes,
+        localIncludeDir: options.localIncludeDir,
     });
-    logger.debug(`${logPrefix} Validation response status: ${response?.status}, data: ${JSON.stringify(response?.data)}`);
-    if (!response || response.status !== 200 || !response.data) {
-        logger.error(`${logPrefix} Invalid response: status=${response?.status}, hasData=${!!response?.data}`);
-        if (isOffline) {
-            await (0, https_remove_1.removeFile)(sshClient, config, types_1.SymitarFileType.POWERON, fileName, logger, logPrefix);
+    if (resolution.includes.length > 0 && !sshClient) {
+        throw new Error('Unable to validate PowerOn with local includes without SSH client');
+    }
+    if (resolution.includes.length > 0 && !isOffline) {
+        throw new Error('Unable to install or online-validate PowerOn with local includes');
+    }
+    const uploadedTempNames = [];
+    try {
+        if (resolution.includes.length > 0) {
+            logger.debug(`${logPrefix} Uploading ${resolution.includes.length} local include(s) for ${entryOriginalName}`);
         }
-        throw new Error('Unable to validate PowerOn from Symitar');
+        for (const include of resolution.includes) {
+            logger.debug(`${logPrefix} Uploading include ${include.originalName} as ${include.tempName}`);
+            const includeBody = (0, line_endings_1.normalizeBufferLineEndings)(Buffer.from(include.rewrittenContent, 'utf8'));
+            const includeResponse = await client.post('/root/invoke', includeBody, {
+                headers: {
+                    'Content-Length': includeBody.length.toString(),
+                    action: types_1.SymitarAppServerAction.FILE_DEPLOY,
+                    poweronName: include.tempName,
+                    type: types_1.SymitarAppServerFileType.POWERON,
+                    install: 'false',
+                },
+            });
+            if (!includeResponse ||
+                includeResponse.status !== 200 ||
+                !includeResponse.data ||
+                getTaskManagerStatus(includeResponse.data) !== 'success') {
+                throw new Error(`Unable to upload local include ${include.originalName} to Symitar: ${getUploadFailureMessage(includeResponse?.data)}`);
+            }
+            uploadedTempNames.push(include.tempName);
+        }
+        const entryBody = (0, line_endings_1.normalizeBufferLineEndings)(Buffer.from(resolution.entryRewrittenContent, 'utf8'));
+        const response = await client.post('/root/invoke', entryBody, {
+            headers: {
+                'Content-Length': entryBody.length.toString(),
+                action: types_1.SymitarAppServerAction.POWERON_VALIDATE,
+                poweronName: entryTempName,
+                type: types_1.SymitarAppServerFileType.POWERON,
+                install: install ? 'true' : 'false',
+                validatePowerOn: 'true',
+            },
+        });
+        uploadedTempNames.push(entryTempName);
+        logger.debug(`${logPrefix} Validation response status: ${response?.status}, data: ${JSON.stringify(response?.data)}`);
+        if (!response || response.status !== 200 || !response.data) {
+            logger.error(`${logPrefix} Invalid response: status=${response?.status}, hasData=${!!response?.data}`);
+            throw new Error('Unable to validate PowerOn from Symitar');
+        }
+        const taskManager = response.data['TaskManager_PowerOnValidateAndInstall'];
+        const taskManagerMessage = taskManager?.['message'];
+        logger.debug(`${logPrefix} TaskManager message: ${taskManagerMessage?.substring(0, 500)}`);
+        const topLevelMessage = response.data['message'];
+        if (topLevelMessage?.toLowerCase().includes('error')) {
+            logger.debug(`${logPrefix} Validation failed for ${entryOriginalName}`);
+            logger.debug(`${logPrefix} Top-level error message: ${topLevelMessage}`);
+            const errors = taskManagerMessage
+                ? (0, helpers_1.replaceValidationFileNames)(taskManagerMessage, resolution.tempToOriginal)
+                : topLevelMessage;
+            return { isValid: false, errors, errorFileName: undefined };
+        }
+        const match = taskManagerMessage?.match(constants_1.APP_SERVER_VALIDATE_PATTERN);
+        logger.debug(`${logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
+        const [isValid, errors, errorFileName] = (0, helpers_1.buildValidationResult)(match, resolution.tempToOriginal);
+        if (isValid) {
+            logger.debug(`${logPrefix} Validation successful for ${entryOriginalName}`);
+        }
+        else {
+            logger.debug(`${logPrefix} Validation failed for ${entryOriginalName}`);
+            logger.debug(`${logPrefix} Errors: ${errors}`);
+            if (errorFileName) {
+                logger.debug(`${logPrefix} Error in file: ${errorFileName}`);
+            }
+        }
+        return { isValid, errors, errorFileName };
     }
-    const taskManager = response.data['TaskManager_PowerOnValidateAndInstall'];
-    const taskManagerMessage = taskManager?.['message'];
-    logger.debug(`${logPrefix} TaskManager message: ${taskManagerMessage?.substring(0, 500)}`);
-    const match = taskManagerMessage?.match(constants_1.APP_SERVER_VALIDATE_PATTERN);
-    logger.debug(`${logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
-    const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
-    if (isValid) {
-        logger.info(`${logPrefix} Validation successful for ${powerOnName}`);
+    finally {
+        const namesToClean = isOffline
+            ? uploadedTempNames
+            : uploadedTempNames.filter((n) => n !== entryTempName);
+        if (namesToClean.length > 0 && sshClient) {
+            try {
+                const results = await (0, https_remove_1.removeFiles)(sshClient, config, types_1.SymitarFileType.POWERON, namesToClean, logger, logPrefix, { logFailures: false });
+                for (const failure of results.filter((r) => !r.success)) {
+                    logger.warn(`${logPrefix} Failed to clean up validation temp ${failure.fileName}: ${failure.error ?? 'unknown error'}`);
+                }
+            }
+            catch (cleanupError) {
+                const message = cleanupError instanceof Error
+                    ? cleanupError.message
+                    : String(cleanupError);
+                logger.warn(`${logPrefix} Failed to clean up validation temp file(s) [${namesToClean.join(', ')}]: ${message}`);
+            }
+        }
     }
-    else {
-        logger.info(`${logPrefix} Validation failed for ${powerOnName}`);
-        logger.debug(`${logPrefix} Errors: ${errors}`);
-    }
-    if (isOffline) {
-        await (0, https_remove_1.removeFile)(sshClient, config, types_1.SymitarFileType.POWERON, fileName, logger, logPrefix);
-    }
-    return { isValid, errors };
 };
 exports.validatePowerOn = validatePowerOn;
 //# sourceMappingURL=https.validate.js.map
 
 /***/ }),
 
-/***/ 78160:
+/***/ 47649:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -5146,8 +5374,9 @@ exports.validatePowerOn = validatePowerOn;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHExecutePowerOn = void 0;
 const rxjs_1 = __nccwpck_require__(17828);
-const types_1 = __nccwpck_require__(27118);
-const ssh_worker_1 = __nccwpck_require__(21197);
+const crypto_1 = __nccwpck_require__(76982);
+const types_1 = __nccwpck_require__(19233);
+const ssh_worker_1 = __nccwpck_require__(21770);
 class SymitarSSHExecutePowerOn extends ssh_worker_1.SymitarSSHWorker {
     get logPrefix() {
         return `[SymitarSSHExecutePowerOn]`;
@@ -5184,8 +5413,103 @@ class SymitarSSHExecutePowerOn extends ssh_worker_1.SymitarSSHWorker {
         this.setState('executing');
         const queue = options?.batchQueue !== undefined ? String(options.batchQueue) : '';
         this.logger.debug(`${this.logPrefix} Batch queue: ${queue || '(default)'}`);
+        const inputs = options?.inputs ?? [];
+        let inputIndex = 0;
+        const transactionId = (0, crypto_1.randomUUID)();
+        const hasPromptHandler = !!options?.promptHandler;
+        const hasInputs = inputs.length > 0;
+        this.logger.debug(`${this.logPrefix} Starting batch submission (promptHandler: ${hasPromptHandler}, inputs: ${inputs.length})`);
+        this.send([`${powerOnName}\r`]);
+        await new Promise((resolve, reject) => {
+            const timeout = options?.timeout ?? 120000;
+            let completed = false;
+            let sawPowerOnNameEcho = false;
+            let dataBuffer = '';
+            const cleanup = () => {
+                completed = true;
+                subscription.unsubscribe();
+            };
+            const subscription = this.data$.subscribe({
+                next: (data) => {
+                    if (completed)
+                        return;
+                    this.logger.debug(`${this.logPrefix} Received data: ${data.trim()}`);
+                    if (!sawPowerOnNameEcho) {
+                        dataBuffer += data;
+                        if (dataBuffer.includes(powerOnName)) {
+                            sawPowerOnNameEcho = true;
+                            dataBuffer = '';
+                            this.logger.debug(`${this.logPrefix} PowerOn name echoed, now waiting for prompts`);
+                        }
+                        if (data.includes(types_1.SymitarCLIExecutePrompts.POWERON_FILE)) {
+                            this.logger.debug(`${this.logPrefix} Skipping initial Specification File prompt`);
+                            return;
+                        }
+                        return;
+                    }
+                    if (data.includes(types_1.SymitarCLIExecutePrompts.POWERON_FILE)) {
+                        this.logger.debug(`${this.logPrefix} Reached Specification File prompt, inputs complete`);
+                        cleanup();
+                        resolve();
+                        return;
+                    }
+                    if (this.isInputPrompt(data)) {
+                        const promptText = this.extractPromptText(data);
+                        if (hasPromptHandler && options?.promptHandler) {
+                            this.logger.debug(`${this.logPrefix} Calling promptHandler for: "${promptText}"`);
+                            const prompt = {
+                                text: promptText,
+                                context: data.split('\n').filter((line) => line.trim()),
+                                transactionId,
+                            };
+                            (async () => {
+                                try {
+                                    const userInput = await options.promptHandler(prompt);
+                                    if (userInput === undefined) {
+                                        cleanup();
+                                        reject(new Error('Execution cancelled by user'));
+                                        return;
+                                    }
+                                    this.logger.debug(`${this.logPrefix} Received input from promptHandler: "${userInput}"`);
+                                    this.send([`${userInput}\r`]);
+                                }
+                                catch (err) {
+                                    cleanup();
+                                    reject(err);
+                                }
+                            })();
+                        }
+                        else if (hasInputs && inputIndex < inputs.length) {
+                            const input = inputs[inputIndex];
+                            this.logger.debug(`${this.logPrefix} Sending input ${inputIndex + 1}/${inputs.length}: ${input}`);
+                            this.send([`${input}\r`]);
+                            inputIndex++;
+                        }
+                        else {
+                            if (hasPromptHandler) {
+                                cleanup();
+                                reject(new Error(`PowerOn requires input but no response received. Prompt: ${promptText}`));
+                            }
+                            else {
+                                this.logger.warn(`${this.logPrefix} Received input prompt but no more inputs available: "${promptText}"`);
+                                this.send(['\r']);
+                            }
+                        }
+                    }
+                },
+                error: (err) => {
+                    cleanup();
+                    reject(err);
+                },
+            });
+            setTimeout(() => {
+                if (!completed) {
+                    cleanup();
+                    reject(new Error(`Batch job submission timed out after ${timeout}ms`));
+                }
+            }, timeout);
+        });
         const commands = [
-            `${powerOnName}\r`,
             '\r',
             'y\r',
             'n\r',
@@ -5207,13 +5531,48 @@ class SymitarSSHExecutePowerOn extends ssh_worker_1.SymitarSSHWorker {
         this.setState('ready');
         return powerOnName;
     }
+    isInputPrompt(data) {
+        if (data.includes(types_1.SymitarCLIExecutePrompts.POWERON_FILE)) {
+            return false;
+        }
+        const cleanData = data
+            .replace(/~\[\d*m/g, '')
+            .replace(/\x1b\[\d*m/g, '')
+            .replace(/~+/g, '\n');
+        const inputPromptWithUnderscores = /:_{2,}/;
+        const inputPromptEndingWithColon = /:\s*$/m;
+        const datePromptPattern = /\[.*\]\s*:\s*$/m;
+        return (inputPromptWithUnderscores.test(cleanData) ||
+            inputPromptEndingWithColon.test(cleanData) ||
+            datePromptPattern.test(cleanData));
+    }
+    extractPromptText(data) {
+        const cleanData = data
+            .replace(/~\[\d*m/g, '')
+            .replace(/\x1b\[\d*m/g, '')
+            .replace(/~+/g, '\n');
+        const lines = cleanData.split('\n').filter((line) => line.trim());
+        if (lines.length === 0) {
+            return '';
+        }
+        const cleanLine = (line) => line
+            .replace(/\x08/g, '')
+            .replace(/_+$/, '')
+            .trim();
+        const lastLine = lines[lines.length - 1];
+        const isInputFieldDecoration = /^:?\s*[_\s]*$/.test(lastLine.replace(/\x08/g, ''));
+        if (isInputFieldDecoration && lines.length >= 2) {
+            return cleanLine(lines[lines.length - 2]);
+        }
+        return cleanLine(lastLine);
+    }
 }
 exports.SymitarSSHExecutePowerOn = SymitarSSHExecutePowerOn;
 //# sourceMappingURL=ssh.execute.js.map
 
 /***/ }),
 
-/***/ 69228:
+/***/ 99805:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5259,10 +5618,11 @@ exports.SymitarSSHInstallPowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
 const rxjs_1 = __nccwpck_require__(17828);
-const paths_1 = __nccwpck_require__(30647);
-const ssh_utils_1 = __nccwpck_require__(66933);
-const types_1 = __nccwpck_require__(27118);
-const ssh_worker_1 = __nccwpck_require__(21197);
+const paths_1 = __nccwpck_require__(84576);
+const ssh_utils_1 = __nccwpck_require__(82334);
+const types_1 = __nccwpck_require__(19233);
+const line_endings_1 = __nccwpck_require__(74689);
+const ssh_worker_1 = __nccwpck_require__(21770);
 async function sendInstallCommand(worker, powerOnName) {
     worker['logger'].debug(`${worker['logPrefix']} Sending install commands for: ${powerOnName}`);
     worker['setState']('executing');
@@ -5305,9 +5665,20 @@ class SymitarSSHInstallPowerOn extends ssh_worker_1.SymitarSSHWorker {
         this.logger.debug(`${this.logPrefix} Local path: ${localFilePath}`);
         this.logger.debug(`${this.logPrefix} Remote path: ${remoteFilePath}`);
         const data = await fs.promises.readFile(localFilePath, 'utf8');
-        const lfData = data.replace(/\r\n/g, '\n');
+        const lfData = (0, line_endings_1.normalizeStringLineEndings)(data);
         this.logger.debug(`${this.logPrefix} File size: ${lfData.length} bytes (after LF conversion)`);
-        await (0, ssh_utils_1.sftpWriteFile)(sftp, remoteFilePath, Buffer.from(lfData, 'utf8'));
+        await (0, ssh_utils_1.sftpWriteFile)(sftp, remoteFilePath, Buffer.from(lfData, 'utf8'), {
+            mode: 0o770,
+        });
+        const chmodResult = await (0, ssh_utils_1.execCommand)(this.client, `chmod 770 ${(0, ssh_utils_1.escapeShellArg)(remoteFilePath)}`);
+        if (chmodResult.code !== 0) {
+            this.logger.warn(`${this.logPrefix} chmod failed for ${powerOnName}: ${chmodResult.stderr.trim()}`);
+        }
+        const symGroup = path_1.default.basename((0, paths_1.getSymDirectory)(this.config.symNumber));
+        const chgrpResult = await (0, ssh_utils_1.execCommand)(this.client, `chgrp ${(0, ssh_utils_1.escapeShellArg)(symGroup)} ${(0, ssh_utils_1.escapeShellArg)(remoteFilePath)}`);
+        if (chgrpResult.code !== 0) {
+            this.logger.warn(`${this.logPrefix} chgrp failed for ${powerOnName}: ${chgrpResult.stderr.trim()}`);
+        }
         this.logger.debug(`${this.logPrefix} SFTP write completed`);
         this.logger.info(`${this.logPrefix} Installing PowerOn: ${powerOnName}`);
         await sendInstallCommand(this, powerOnName);
@@ -5323,7 +5694,7 @@ exports.SymitarSSHInstallPowerOn = SymitarSSHInstallPowerOn;
 
 /***/ }),
 
-/***/ 42493:
+/***/ 8908:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5335,51 +5706,128 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSH = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const ssh2_1 = __nccwpck_require__(41828);
-const ssh_worker_factory_1 = __nccwpck_require__(58205);
-const ssh_synchronize_1 = __nccwpck_require__(22461);
-const ssh_list_1 = __nccwpck_require__(46267);
-const interfaces_1 = __nccwpck_require__(72819);
-const types_1 = __nccwpck_require__(27118);
-const sftp_sync_1 = __nccwpck_require__(56312);
-const helpers_1 = __nccwpck_require__(73878);
-const logging_1 = __nccwpck_require__(6358);
-const ssh_reports_1 = __nccwpck_require__(14788);
+const ssh_worker_factory_1 = __nccwpck_require__(15094);
+const ssh_synchronize_1 = __nccwpck_require__(3168);
+const ssh_list_1 = __nccwpck_require__(39280);
+const interfaces_1 = __nccwpck_require__(78006);
+const types_1 = __nccwpck_require__(19233);
+const sftp_sync_1 = __nccwpck_require__(7371);
+const helpers_1 = __nccwpck_require__(56177);
+const logging_1 = __nccwpck_require__(37533);
+const ssh_reports_1 = __nccwpck_require__(95917);
 class SymitarSSH extends interfaces_1.BaseSymitarClient {
-    _client = new ssh2_1.Client();
+    _client;
     _connected = false;
+    _connectionLost = false;
+    _intentionalDisconnect = false;
+    _isReady;
+    _isReadyResolve;
+    _isReadyReject;
+    _activeWorkers = new Set();
     _logPrefix = '[SymitarSSH]';
     _config;
-    isReady;
+    _logLevel;
+    _customLogger;
+    get isReady() {
+        return this._isReady;
+    }
+    get sshClient() {
+        return this._client;
+    }
     constructor(config, logLevel = 'info', customLogger) {
         super((0, logging_1.createLogger)(logLevel, customLogger));
         this._config = config;
+        this._logLevel = logLevel;
+        this._customLogger = customLogger;
+        this._client = new ssh2_1.Client();
         this._logger.debug(`${this._logPrefix} Initializing SSH connection to ${config.host}:${config.port || 22}`);
-        this.isReady = new Promise((resolve, reject) => {
+        this._isReady = this._setupConnection();
+    }
+    _setupConnection() {
+        return new Promise((resolve, reject) => {
+            this._isReadyResolve = resolve;
+            this._isReadyReject = reject;
             this._client
                 .on('ready', () => {
                 this._connected = true;
+                this._connectionLost = false;
                 this._logger.info(`${this._logPrefix} Connected to Symitar`);
-                this._logger.debug(`${this._logPrefix} Connection established to ${config.host}`);
+                this._logger.debug(`${this._logPrefix} Connection established to ${this._config.host}`);
                 resolve();
             })
                 .on('error', (err) => {
                 this._logger.error(`${this._logPrefix} Connection error: ${err.message}`);
+                this._connected = false;
                 reject(err);
+            })
+                .on('close', () => {
+                if (this._intentionalDisconnect) {
+                    this._logger.debug(`${this._logPrefix} SSH connection closed`);
+                }
+                else {
+                    this._logger.warn(`${this._logPrefix} SSH connection closed unexpectedly`);
+                }
+                this._connected = false;
+                this._connectionLost = !this._intentionalDisconnect;
+            })
+                .on('end', () => {
+                if (this._intentionalDisconnect) {
+                    this._logger.debug(`${this._logPrefix} SSH connection ended`);
+                }
+                else {
+                    this._logger.warn(`${this._logPrefix} SSH connection ended unexpectedly`);
+                }
+                this._connected = false;
+                this._connectionLost = !this._intentionalDisconnect;
             })
                 .on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
                 this._logger.debug(`${this._logPrefix} Keyboard-interactive auth requested`);
-                finish([config.password]);
+                finish([this._config.password]);
             })
                 .connect({
-                ...config,
+                ...this._config,
                 tryKeyboard: true,
             });
         });
     }
+    isConnected() {
+        return this._connected && !this._connectionLost;
+    }
+    hasConnectionLost() {
+        return this._connectionLost;
+    }
+    async reconnect() {
+        this._logger.info(`${this._logPrefix} Attempting to reconnect...`);
+        try {
+            this._client.end();
+        }
+        catch {
+        }
+        this._client = new ssh2_1.Client();
+        this._connected = false;
+        this._connectionLost = false;
+        this._isReady = this._setupConnection();
+        await this._isReady;
+        this._logger.info(`${this._logPrefix} Reconnection successful`);
+    }
+    async _ensureConnected() {
+        if (this._connectionLost) {
+            this._logger.info(`${this._logPrefix} Connection lost, attempting reconnect`);
+            await this.reconnect();
+        }
+        else if (!this._connected) {
+            await this.isReady;
+        }
+    }
     async createWorker(type, config) {
         this._logger.debug(`${this._logPrefix} Creating worker: type=${type}, sym=${config.symNumber}`);
-        if (!this._connected)
+        if (this._connectionLost) {
+            this._logger.info(`${this._logPrefix} Connection lost, attempting reconnect before creating worker`);
+            await this.reconnect();
+        }
+        else if (!this._connected) {
             await this.isReady;
+        }
         const hostname = this._config.host || 'unknown';
         if (ssh_worker_factory_1.SymitarSSHWorkerFactory.isShellWorkerType(type)) {
             this._logger.debug(`${this._logPrefix} Opening shell channel for ${type}`);
@@ -5391,6 +5839,7 @@ class SymitarSSH extends interfaces_1.BaseSymitarClient {
                     }
                     this._logger.debug(`${this._logPrefix} Shell channel opened`);
                     const worker = ssh_worker_factory_1.SymitarSSHWorkerFactory.createShellWorker(type, hostname, config, this._logger, this._client, channel);
+                    this._activeWorkers.add(worker);
                     resolve(worker);
                 });
             });
@@ -5405,6 +5854,7 @@ class SymitarSSH extends interfaces_1.BaseSymitarClient {
                     }
                     this._logger.debug(`${this._logPrefix} SFTP channel opened`);
                     const worker = ssh_worker_factory_1.SymitarSSHWorkerFactory.createSftpWorker(type, hostname, config, this._logger, this._client, sftp);
+                    this._activeWorkers.add(worker);
                     resolve(worker);
                 });
             });
@@ -5427,21 +5877,26 @@ class SymitarSSH extends interfaces_1.BaseSymitarClient {
                     syncMode,
                     concurrency: options.concurrency,
                     onProgress: options.onProgress,
+                    compareMode: options.compareMode,
                 }, this._logger);
             }
             finally {
                 await sftpService.disconnect();
             }
         }
-        return (0, ssh_synchronize_1.getChangedFiles)(this._config, symitarConfig, localDirectory, remoteDirectory, this._logger, syncMode);
+        return (0, ssh_synchronize_1.getChangedFiles)(this._config, symitarConfig, localDirectory, remoteDirectory, this._logger, syncMode, options);
     }
     async listFiles(symitarConfig, directory) {
-        if (!this._connected)
-            await this.isReady;
+        await this._ensureConnected();
         return (0, ssh_list_1.listFiles)(this._client, symitarConfig, directory, this._logger, this._logPrefix);
     }
     async syncFiles(symitarConfig, localDirectory, remoteDirectory, syncMode, options, isDryRun = true) {
-        return (0, ssh_synchronize_1.syncFiles)(this._config, symitarConfig, localDirectory, remoteDirectory, syncMode, isDryRun, this._logger, options, () => this.createValidateWorker(symitarConfig), () => this.createInstallWorker(symitarConfig), () => this.createUninstallWorker(symitarConfig));
+        await this._ensureConnected();
+        const optionsWithClient = {
+            ...options,
+            existingClient: this._client,
+        };
+        return (0, ssh_synchronize_1.syncFiles)(this._config, symitarConfig, localDirectory, remoteDirectory, syncMode, isDryRun, this._logger, optionsWithClient, () => this.createValidateWorker(symitarConfig), () => this.createInstallWorker(symitarConfig), () => this.createUninstallWorker(symitarConfig));
     }
     async synchronizeFiles(symitarConfig, localDirectory, installPowerOnList, isDryRun = true, remoteDirectory = types_1.SymitarSyncDirectory.REPWRITERSPECS, syncMode = types_1.SymitarSyncMode.MIRROR, validateIgnoreList = [], options = {}) {
         return this.syncFiles(symitarConfig, localDirectory, remoteDirectory, syncMode, {
@@ -5468,8 +5923,23 @@ class SymitarSSH extends interfaces_1.BaseSymitarClient {
         return this.createWorker(types_1.SymitarWorkerType.EXECUTE_POWERON, config);
     }
     end() {
+        this._intentionalDisconnect = true;
+        for (const worker of this._activeWorkers) {
+            try {
+                worker.end();
+            }
+            catch {
+            }
+        }
+        this._activeWorkers.clear();
         return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                this._logger.warn(`${this._logPrefix} Connection close timed out after 5s, forcing disconnect`);
+                this._client.destroy();
+                resolve();
+            }, 5000);
             this._client.on('close', () => {
+                clearTimeout(timeout);
                 this._logger.info(`${this._logPrefix} Disconnected from Symitar`);
                 resolve();
             });
@@ -5487,18 +5957,15 @@ class SymitarSSH extends interfaces_1.BaseSymitarClient {
         }
     }
     async fetchLatestReportByTitle(config, title, options) {
-        if (!this._connected)
-            await this.isReady;
+        await this._ensureConnected();
         return (0, ssh_reports_1.fetchLatestReportByTitle)(this._client, config, title, options, this._logger, this._logPrefix);
     }
     async fetchReportBySequence(config, sequence, options) {
-        if (!this._connected)
-            await this.isReady;
+        await this._ensureConnected();
         return (0, ssh_reports_1.fetchReportBySequence)(this._client, config, sequence, options, this._logger, this._logPrefix);
     }
     async waitForBatchSequences(config, title, timeoutSeconds = 300) {
-        if (!this._connected)
-            await this.isReady;
+        await this._ensureConnected();
         return (0, ssh_reports_1.waitForBatchSequences)(this._client, config, title, timeoutSeconds, this._logger, this._logPrefix);
     }
     async executePowerOn(config, powerOnName, options) {
@@ -5516,15 +5983,15 @@ exports.SymitarSSH = SymitarSSH;
 
 /***/ }),
 
-/***/ 46267:
+/***/ 39280:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.listFiles = listFiles;
-const paths_1 = __nccwpck_require__(30647);
-const ssh_utils_1 = __nccwpck_require__(66933);
+const paths_1 = __nccwpck_require__(84576);
+const ssh_utils_1 = __nccwpck_require__(82334);
 async function listFiles(client, config, directory, logger, logPrefix) {
     const remotePath = (0, paths_1.getRemoteDirectoryPath)(config.symNumber, directory).replace(/\/$/, '');
     logger.debug(`${logPrefix} Listing files in ${remotePath}`);
@@ -5551,7 +6018,7 @@ async function listFiles(client, config, directory, logger, logPrefix) {
 
 /***/ }),
 
-/***/ 14788:
+/***/ 95917:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -5560,8 +6027,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fetchLatestReportByTitle = fetchLatestReportByTitle;
 exports.fetchReportBySequence = fetchReportBySequence;
 exports.waitForBatchSequences = waitForBatchSequences;
-const helpers_1 = __nccwpck_require__(73878);
-const scripts_1 = __nccwpck_require__(52819);
+const helpers_1 = __nccwpck_require__(56177);
+const scripts_1 = __nccwpck_require__(54868);
 const SCRIPT_DIR = '.libum';
 const DEFAULT_TIMEOUT = 30000;
 function execCommand(client, command, logger, logPrefix) {
@@ -5759,17 +6226,17 @@ async function waitForBatchSequences(client, config, title, timeoutSeconds, logg
 
 /***/ }),
 
-/***/ 22461:
+/***/ 3168:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.syncFiles = exports.getChangedFiles = void 0;
-const helpers_1 = __nccwpck_require__(73878);
-const types_1 = __nccwpck_require__(27118);
-const sftp_sync_1 = __nccwpck_require__(56312);
-const sync_orchestrator_1 = __nccwpck_require__(76453);
+const helpers_1 = __nccwpck_require__(56177);
+const types_1 = __nccwpck_require__(19233);
+const sftp_sync_1 = __nccwpck_require__(7371);
+const sync_orchestrator_1 = __nccwpck_require__(75110);
 async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, remoteDirectory, syncMode, isDryRun, options, logger, deployed, deleted) {
     const transport = options.transport || types_1.SymitarSyncTransport.RSYNC;
     if (isDryRun) {
@@ -5777,6 +6244,7 @@ async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, re
             synced: deployed,
             deleted,
             skipped: [],
+            outliers: [],
             errors: [],
         };
     }
@@ -5794,6 +6262,11 @@ async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, re
                 syncMode,
                 concurrency: options.concurrency,
                 onProgress: options.onProgress,
+                minMtime: options.minMtime,
+                existingClient: options.existingClient,
+                preserveServerFiles: options.preserveServerFiles,
+                pullPreservedOnly: options.pullPreservedOnly,
+                compareMode: options.compareMode,
             }, isDryRun, logger);
         }
         finally {
@@ -5808,11 +6281,15 @@ async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, re
         localDirectory,
         remoteDirectory,
         syncMode,
+        preserveServerFiles: options.preserveServerFiles,
+        pullPreservedOnly: options.pullPreservedOnly,
+        compareMode: options.compareMode,
     }, isDryRun);
     return {
         synced: deployed,
         deleted,
         skipped: [],
+        outliers: [],
         errors: [],
     };
 }
@@ -5835,6 +6312,11 @@ const getChangedFiles = async (sshConfig, symitarConfig, localDirectory, remoteD
                     syncMode,
                     concurrency: options.concurrency,
                     onProgress: options.onProgress,
+                    minMtime: options.minMtime,
+                    existingClient: options.existingClient,
+                    preserveServerFiles: options.preserveServerFiles,
+                    pullPreservedOnly: options.pullPreservedOnly,
+                    compareMode: options.compareMode,
                 }, logger);
             }
             finally {
@@ -5849,11 +6331,13 @@ const getChangedFiles = async (sshConfig, symitarConfig, localDirectory, remoteD
             localDirectory,
             remoteDirectory,
             syncMode,
+            preserveServerFiles: options.preserveServerFiles,
+            pullPreservedOnly: options.pullPreservedOnly,
+            compareMode: options.compareMode,
         }, true);
         return changedFiles;
     }
     catch (error) {
-        logger.error(`${logPrefix} Unable to get changed files: ${error.message}`);
         throw error;
     }
 };
@@ -5874,7 +6358,9 @@ const syncFiles = async (sshConfig, symitarConfig, localDirectory, remoteDirecto
             if (!validateWorker) {
                 validateWorker = await createValidateWorker();
             }
-            const result = await validateWorker.validatePowerOn(filePath);
+            const result = await validateWorker.validatePowerOn(filePath, {
+                localIncludeDir: localDirectory,
+            });
             return { isValid: result.isValid, errors: result.errors };
         },
         executeSync: (deployed, deleted) => executeSyncTransport(sshConfig, symitarConfig, localDirectory, remoteDirectory, syncMode, isDryRun, options, logger, deployed, deleted),
@@ -5946,7 +6432,7 @@ exports.syncFiles = syncFiles;
 
 /***/ }),
 
-/***/ 11532:
+/***/ 34039:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -5991,30 +6477,15 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHTransferFile = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
-const ssh_worker_1 = __nccwpck_require__(21197);
-const paths_1 = __nccwpck_require__(30647);
-const ssh_utils_1 = __nccwpck_require__(66933);
+const ssh_worker_1 = __nccwpck_require__(21770);
+const paths_1 = __nccwpck_require__(84576);
+const ssh_utils_1 = __nccwpck_require__(82334);
+const line_endings_1 = __nccwpck_require__(74689);
 class SymitarSSHTransferFile extends ssh_worker_1.SymitarSSHWorker {
     get logPrefix() {
         return `[SymitarSSHTransferFile]`;
     }
     handleData() { }
-    async deployFile(type, localFilePath, remoteFileName) {
-        const fileName = path_1.default.basename(localFilePath);
-        const remoteFilePath = (0, paths_1.getRemoteFilePath)(this.config.symNumber, type, remoteFileName || fileName);
-        await this.isReady();
-        this.logger.info(`${this.logPrefix} Deploying ${fileName} to ${type}/ in Sym ${this.config.symNumber}...`);
-        this.logger.debug(`${this.logPrefix} Local path: ${localFilePath}`);
-        this.logger.debug(`${this.logPrefix} Remote path: ${remoteFilePath}`);
-        this.setState('executing');
-        const data = await fs.promises.readFile(localFilePath, 'utf8');
-        const lfData = data.replace(/\r\n/g, '\n');
-        this.logger.debug(`${this.logPrefix} File size: ${lfData.length} bytes (after LF conversion)`);
-        await (0, ssh_utils_1.sftpWriteFile)(this.channel, remoteFilePath, Buffer.from(lfData, 'utf8'));
-        this.logger.debug(`${this.logPrefix} SFTP write completed`);
-        this.logger.info(`${this.logPrefix} Successfully deployed ${fileName} to ${type}/ in Sym ${this.config.symNumber}`);
-        this.setState('ready');
-    }
     async downloadFile(type, fileName, localPath) {
         const localFilePath = path_1.default.join(localPath, fileName);
         const remoteFilePath = (0, paths_1.getRemoteFilePath)(this.config.symNumber, type, fileName);
@@ -6028,16 +6499,80 @@ class SymitarSSHTransferFile extends ssh_worker_1.SymitarSSHWorker {
         this.logger.info(`${this.logPrefix} Successfully downloaded ${fileName} from ${type}/ in Sym ${this.config.symNumber}`);
         this.setState('ready');
     }
-    async removeFile(type, fileName) {
-        const remoteFilePath = (0, paths_1.getRemoteFilePath)(this.config.symNumber, type, fileName);
+    async removeFiles(type, fileNames, options = {}) {
         await this.isReady();
-        this.logger.info(`${this.logPrefix} Removing ${fileName} from ${type}/ in Sym ${this.config.symNumber}...`);
-        this.logger.debug(`${this.logPrefix} Remote path: ${remoteFilePath}`);
+        this.logger.debug(`${this.logPrefix} Removing ${fileNames.length} file(s) from ${type}/ in Sym ${this.config.symNumber}...`);
         this.setState('executing');
-        await (0, ssh_utils_1.sftpUnlink)(this.channel, remoteFilePath);
-        this.logger.debug(`${this.logPrefix} SFTP unlink completed`);
-        this.logger.info(`${this.logPrefix} Successfully removed ${fileName} from ${type}/ in Sym ${this.config.symNumber}`);
+        const results = [];
+        for (const fileName of fileNames) {
+            const remoteFilePath = (0, paths_1.getRemoteFilePath)(this.config.symNumber, type, fileName);
+            try {
+                this.logger.debug(`${this.logPrefix} Removing ${fileName}...`);
+                this.logger.debug(`${this.logPrefix} Remote path: ${remoteFilePath}`);
+                await (0, ssh_utils_1.sftpUnlink)(this.channel, remoteFilePath);
+                this.logger.debug(`${this.logPrefix} Successfully removed ${fileName}`);
+                results.push({ fileName, success: true });
+            }
+            catch (error) {
+                const errorMessage = error?.message || String(error);
+                const shouldLogFailures = options.logFailures !== false;
+                if (shouldLogFailures) {
+                    this.logger.error(`${this.logPrefix} Failed to remove ${fileName}: ${errorMessage}`);
+                }
+                results.push({ fileName, success: false, error: errorMessage });
+            }
+        }
+        const successCount = results.filter((r) => r.success).length;
+        this.logger.debug(`${this.logPrefix} Removed ${successCount}/${fileNames.length} file(s) from ${type}/ in Sym ${this.config.symNumber}`);
         this.setState('ready');
+        return results;
+    }
+    async deployFiles(type, files) {
+        await this.isReady();
+        this.logger.info(`${this.logPrefix} Deploying ${files.length} file(s) to ${type}/ in Sym ${this.config.symNumber}...`);
+        this.setState('executing');
+        const results = [];
+        for (const file of files) {
+            const fileName = path_1.default.basename(file.localFilePath);
+            const targetName = file.remoteFileName || fileName;
+            const remoteFilePath = (0, paths_1.getRemoteFilePath)(this.config.symNumber, type, targetName);
+            try {
+                this.logger.info(`${this.logPrefix} Deploying ${targetName}...`);
+                this.logger.debug(`${this.logPrefix} Local path: ${file.localFilePath}`);
+                this.logger.debug(`${this.logPrefix} Remote path: ${remoteFilePath}`);
+                const data = await fs.promises.readFile(file.localFilePath, 'utf8');
+                const lfData = (0, line_endings_1.normalizeStringLineEndings)(data);
+                await (0, ssh_utils_1.sftpWriteFile)(this.channel, remoteFilePath, Buffer.from(lfData, 'utf8'), { mode: 0o770 });
+                const chmodResult = await (0, ssh_utils_1.execCommand)(this.client, `chmod 770 ${(0, ssh_utils_1.escapeShellArg)(remoteFilePath)}`);
+                if (chmodResult.code !== 0) {
+                    this.logger.warn(`${this.logPrefix} chmod failed for ${targetName}: ${chmodResult.stderr.trim()}`);
+                }
+                const symDir = (0, paths_1.getSymDirectory)(this.config.symNumber);
+                const symGroup = path_1.default.basename(symDir);
+                const chgrpResult = await (0, ssh_utils_1.execCommand)(this.client, `chgrp ${(0, ssh_utils_1.escapeShellArg)(symGroup)} ${(0, ssh_utils_1.escapeShellArg)(remoteFilePath)}`);
+                if (chgrpResult.code !== 0) {
+                    this.logger.warn(`${this.logPrefix} chgrp failed for ${targetName}: ${chgrpResult.stderr.trim()}`);
+                }
+                this.logger.info(`${this.logPrefix} Successfully deployed ${targetName}`);
+                results.push({
+                    fileName: targetName,
+                    success: true,
+                });
+            }
+            catch (error) {
+                const errorMessage = error?.message || String(error);
+                this.logger.error(`${this.logPrefix} Failed to deploy ${targetName}: ${errorMessage}`);
+                results.push({
+                    fileName: targetName,
+                    success: false,
+                    error: errorMessage,
+                });
+            }
+        }
+        const successCount = results.filter((r) => r.success).length;
+        this.logger.info(`${this.logPrefix} Deployed ${successCount}/${files.length} file(s) to ${type}/ in Sym ${this.config.symNumber}`);
+        this.setState('ready');
+        return results;
     }
 }
 exports.SymitarSSHTransferFile = SymitarSSHTransferFile;
@@ -6045,15 +6580,15 @@ exports.SymitarSSHTransferFile = SymitarSSHTransferFile;
 
 /***/ }),
 
-/***/ 10441:
+/***/ 94644:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHUninstallPowerOn = void 0;
-const types_1 = __nccwpck_require__(27118);
-const ssh_worker_1 = __nccwpck_require__(21197);
+const types_1 = __nccwpck_require__(19233);
+const ssh_worker_1 = __nccwpck_require__(21770);
 const rxjs_1 = __nccwpck_require__(17828);
 class SymitarSSHUninstallPowerOn extends ssh_worker_1.SymitarSSHWorker {
     get logPrefix() {
@@ -6081,7 +6616,7 @@ exports.SymitarSSHUninstallPowerOn = SymitarSSHUninstallPowerOn;
 
 /***/ }),
 
-/***/ 11045:
+/***/ 76358:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -6127,12 +6662,44 @@ exports.SymitarSSHValidatePowerOn = void 0;
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const fs = __importStar(__nccwpck_require__(79896));
 const rxjs_1 = __nccwpck_require__(17828);
-const ssh_worker_1 = __nccwpck_require__(21197);
-const constants_1 = __nccwpck_require__(88922);
-const helpers_1 = __nccwpck_require__(73878);
-const paths_1 = __nccwpck_require__(30647);
-const ssh_utils_1 = __nccwpck_require__(66933);
-const types_1 = __nccwpck_require__(27118);
+const ssh_worker_1 = __nccwpck_require__(21770);
+const constants_1 = __nccwpck_require__(90857);
+const helpers_1 = __nccwpck_require__(56177);
+const paths_1 = __nccwpck_require__(84576);
+const ssh_utils_1 = __nccwpck_require__(82334);
+const types_1 = __nccwpck_require__(19233);
+const line_endings_1 = __nccwpck_require__(74689);
+async function uploadPowerOnSource(args) {
+    const { sftp, client, symNumber, symGroup, fileName, content, logger } = args;
+    const remoteFilePath = (0, paths_1.getRemoteFilePath)(symNumber, types_1.SymitarFileType.POWERON, fileName);
+    await (0, ssh_utils_1.sftpWriteFile)(sftp, remoteFilePath, (0, line_endings_1.normalizeBufferLineEndings)(Buffer.from(content, 'utf8')), {
+        mode: 0o770,
+    });
+    const chmodResult = await (0, ssh_utils_1.execCommand)(client, `chmod 770 ${(0, ssh_utils_1.escapeShellArg)(remoteFilePath)}`);
+    if (chmodResult.code !== 0) {
+        logger.warn(`${args.logPrefix} chmod failed for ${fileName}: ${chmodResult.stderr.trim()}`);
+    }
+    const chgrpResult = await (0, ssh_utils_1.execCommand)(client, `chgrp ${(0, ssh_utils_1.escapeShellArg)(symGroup)} ${(0, ssh_utils_1.escapeShellArg)(remoteFilePath)}`);
+    if (chgrpResult.code !== 0) {
+        logger.warn(`${args.logPrefix} chgrp failed for ${fileName}: ${chgrpResult.stderr.trim()}`);
+    }
+    return remoteFilePath;
+}
+async function cleanupValidationTemps(args) {
+    const { sftp, symNumber, uploads, isOffline, logger, logPrefix } = args;
+    for (const upload of uploads) {
+        if (upload.isEntry && !isOffline)
+            continue;
+        const remotePath = (0, paths_1.getRemoteFilePath)(symNumber, types_1.SymitarFileType.POWERON, upload.tempName);
+        try {
+            await (0, ssh_utils_1.sftpUnlink)(sftp, remotePath);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logger.warn(`${logPrefix} Failed to clean up temp upload ${upload.tempName}: ${message}`);
+        }
+    }
+}
 class SymitarSSHValidatePowerOn extends ssh_worker_1.SymitarSSHWorker {
     _sftp = null;
     get logPrefix() {
@@ -6158,63 +6725,114 @@ class SymitarSSHValidatePowerOn extends ssh_worker_1.SymitarSSHWorker {
             this.setState('ready');
         }
     }
-    async validatePowerOn(localFilePath, isOffline = true) {
+    async validatePowerOn(localFilePath, options) {
         await this.isReady();
+        const isOffline = options?.isOffline ?? true;
         const sftp = await this.getSftpChannel();
-        const powerOnName = path_1.default.basename(localFilePath);
-        const fileName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
-        const remoteFilePath = (0, paths_1.getRemoteFilePath)(this.config.symNumber, types_1.SymitarFileType.POWERON, fileName);
-        this.logger.info(`${this.logPrefix} Validating PowerOn: ${powerOnName}`);
+        const powerOnName = options?.originalFileName ?? path_1.default.basename(localFilePath);
+        const entryTempName = isOffline ? (0, helpers_1.generateRandomPowerOnName)() : powerOnName;
+        this.logger.debug(`${this.logPrefix} Validating PowerOn: ${powerOnName}`);
         if (isOffline) {
-            this.logger.info(`${this.logPrefix} Uploading mock PowerOn (${fileName}) in Sym ${this.config.symNumber} for validation`);
+            this.logger.debug(`${this.logPrefix} Uploading mock PowerOn (${entryTempName}) in Sym ${this.config.symNumber} for validation`);
         }
         else {
-            this.logger.info(`${this.logPrefix} Uploading PowerOn (${fileName}) to Sym ${this.config.symNumber}`);
+            this.logger.debug(`${this.logPrefix} Uploading PowerOn (${entryTempName}) to Sym ${this.config.symNumber}`);
         }
         const data = await fs.promises.readFile(localFilePath, 'utf8');
-        const lfData = data.replace(/\r\n/g, '\n');
-        await (0, ssh_utils_1.sftpWriteFile)(sftp, remoteFilePath, Buffer.from(lfData, 'utf8'));
-        this.setState('executing');
-        this.send([`${fileName}\r`]);
-        this.logger.info(`${this.logPrefix} Waiting for validation response...`);
-        let lastReceivedData = '';
-        const result = await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.tap)((d) => {
-            lastReceivedData = d;
-            if (d.includes(types_1.SymitarCLIValidatePrompts.FILE_DOES_NOT_EXIST)) {
-                this.send([constants_1.ESC, '7\r']);
+        const lfData = (0, line_endings_1.normalizeStringLineEndings)(data);
+        const resolution = await (0, helpers_1.resolveLocalIncludes)({
+            entryFilePath: localFilePath,
+            entryContent: lfData,
+            entryTempName,
+            entryOriginalName: powerOnName,
+            localIncludes: options?.localIncludes,
+            localIncludeDir: options?.localIncludeDir,
+        });
+        if (resolution.includes.length > 0 && !isOffline) {
+            throw new Error('Unable to install or online-validate PowerOn with local includes');
+        }
+        const symGroup = path_1.default.basename((0, paths_1.getSymDirectory)(this.config.symNumber));
+        const uploadedTemps = [];
+        let result;
+        try {
+            if (resolution.includes.length > 0) {
+                this.logger.debug(`${this.logPrefix} Uploading ${resolution.includes.length} local include(s) for ${powerOnName}`);
             }
-            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_SUCH_FILE_OR_DIRECTORY)) {
-                this.send([constants_1.ESC]);
+            for (const include of resolution.includes) {
+                this.logger.debug(`${this.logPrefix} Uploading include ${include.originalName} as ${include.tempName}`);
+                await uploadPowerOnSource({
+                    sftp,
+                    client: this.client,
+                    symNumber: this.config.symNumber,
+                    symGroup,
+                    fileName: include.tempName,
+                    content: include.rewrittenContent,
+                    logger: this.logger,
+                    logPrefix: this.logPrefix,
+                });
+                uploadedTemps.push({ tempName: include.tempName, isEntry: false });
             }
-        }), (0, rxjs_1.filter)((d) => [
-            types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND,
-            types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE,
-        ].some((t) => d.includes(t))), (0, rxjs_1.tap)((d) => {
-            if (d.includes(types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE)) {
-                this.send(['n\r', '7\r']);
-            }
-            else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND)) {
-                this.send(['\r', '7\r']);
-            }
-        }), (0, rxjs_1.timeout)({
-            each: 60000,
-            with: () => {
-                const lastData = lastReceivedData
-                    ? lastReceivedData.substring(0, 200)
-                    : '(no data received)';
-                throw new Error(`${this.logPrefix} Validation timed out after 60s for ${powerOnName} ` +
-                    `(remote: ${remoteFilePath}). Last received data: ${lastData}`);
-            },
-        }), (0, rxjs_1.take)(1)));
+            await uploadPowerOnSource({
+                sftp,
+                client: this.client,
+                symNumber: this.config.symNumber,
+                symGroup,
+                fileName: entryTempName,
+                content: resolution.entryRewrittenContent,
+                logger: this.logger,
+                logPrefix: this.logPrefix,
+            });
+            uploadedTemps.push({ tempName: entryTempName, isEntry: true });
+            const remoteFilePath = (0, paths_1.getRemoteFilePath)(this.config.symNumber, types_1.SymitarFileType.POWERON, entryTempName);
+            this.setState('executing');
+            this.send([`${entryTempName}\r`]);
+            this.logger.debug(`${this.logPrefix} Waiting for validation response...`);
+            let lastReceivedData = '';
+            result = await (0, rxjs_1.lastValueFrom)(this.data$.pipe((0, rxjs_1.tap)((d) => {
+                lastReceivedData = d;
+                if (d.includes(types_1.SymitarCLIValidatePrompts.FILE_DOES_NOT_EXIST)) {
+                    this.send([constants_1.ESC, '7\r']);
+                }
+                else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_SUCH_FILE_OR_DIRECTORY)) {
+                    this.send([constants_1.ESC]);
+                }
+            }), (0, rxjs_1.filter)((d) => [
+                types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND,
+                types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE,
+            ].some((t) => d.includes(t))), (0, rxjs_1.tap)((d) => {
+                if (d.includes(types_1.SymitarCLIValidatePrompts.EDIT_SPECFILE)) {
+                    this.send(['n\r', '7\r']);
+                }
+                else if (d.includes(types_1.SymitarCLIValidatePrompts.NO_ERRORS_FOUND)) {
+                    this.send(['\r', '7\r']);
+                }
+            }), (0, rxjs_1.timeout)({
+                each: 60000,
+                with: () => {
+                    const lastData = lastReceivedData
+                        ? lastReceivedData.substring(0, 200)
+                        : '(no data received)';
+                    throw new Error(`${this.logPrefix} Validation timed out after 60s for ${powerOnName} ` +
+                        `(remote: ${remoteFilePath}). Last received data: ${lastData}`);
+                },
+            }), (0, rxjs_1.take)(1)));
+        }
+        finally {
+            await cleanupValidationTemps({
+                sftp,
+                symNumber: this.config.symNumber,
+                uploads: uploadedTemps,
+                isOffline,
+                logger: this.logger,
+                logPrefix: this.logPrefix,
+            });
+        }
         this.logger.debug(`${this.logPrefix} CLI response: ${result?.substring(0, 500)}`);
         const match = result.match(constants_1.CLI_VALIDATE_PATTERN);
         this.logger.debug(`${this.logPrefix} Pattern match result: ${match ? match[0] : 'null'}`);
-        const [isValid, errors] = (0, helpers_1.buildValidationResult)(match, fileName, powerOnName);
-        this.logger.debug(`${this.logPrefix} Final result: isValid=${isValid}, errors=${errors}`);
-        if (isOffline) {
-            await (0, ssh_utils_1.sftpUnlink)(sftp, remoteFilePath);
-        }
-        return { isValid, errors };
+        const [isValid, errors, errorFileName] = (0, helpers_1.buildValidationResult)(match, resolution.tempToOriginal);
+        this.logger.debug(`${this.logPrefix} Final result: isValid=${isValid}, errors=${errors}, errorFileName=${errorFileName}`);
+        return { isValid, errors, errorFileName };
     }
 }
 exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
@@ -6222,19 +6840,19 @@ exports.SymitarSSHValidatePowerOn = SymitarSSHValidatePowerOn;
 
 /***/ }),
 
-/***/ 58205:
+/***/ 15094:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHWorkerFactory = exports.SFTP_WORKER_TYPES = exports.SHELL_WORKER_TYPES = void 0;
-const types_1 = __nccwpck_require__(27118);
-const ssh_install_1 = __nccwpck_require__(69228);
-const ssh_uninstall_1 = __nccwpck_require__(10441);
-const ssh_validate_1 = __nccwpck_require__(11045);
-const ssh_execute_1 = __nccwpck_require__(78160);
-const ssh_transfer_1 = __nccwpck_require__(11532);
+const types_1 = __nccwpck_require__(19233);
+const ssh_install_1 = __nccwpck_require__(99805);
+const ssh_uninstall_1 = __nccwpck_require__(94644);
+const ssh_validate_1 = __nccwpck_require__(76358);
+const ssh_execute_1 = __nccwpck_require__(47649);
+const ssh_transfer_1 = __nccwpck_require__(34039);
 exports.SHELL_WORKER_TYPES = [
     types_1.SymitarWorkerType.INSTALL_POWERON,
     types_1.SymitarWorkerType.UNINSTALL_POWERON,
@@ -6280,7 +6898,7 @@ exports.SymitarSSHWorkerFactory = SymitarSSHWorkerFactory;
 
 /***/ }),
 
-/***/ 21197:
+/***/ 21770:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -6288,10 +6906,10 @@ exports.SymitarSSHWorkerFactory = SymitarSSHWorkerFactory;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SymitarSSHWorker = void 0;
 const rxjs_1 = __nccwpck_require__(17828);
-const constants_1 = __nccwpck_require__(88922);
-const types_1 = __nccwpck_require__(27118);
-const errors_1 = __nccwpck_require__(90416);
-const logging_1 = __nccwpck_require__(6358);
+const constants_1 = __nccwpck_require__(90857);
+const types_1 = __nccwpck_require__(19233);
+const errors_1 = __nccwpck_require__(68677);
+const logging_1 = __nccwpck_require__(37533);
 class SymitarSSHWorker {
     client;
     channel;
@@ -6485,6 +7103,19 @@ class SymitarSSHWorker {
         this._loginMap.set(types_1.SymitarCLILogin.TOO_MANY_ATTEMPTS, true);
         return true;
     }
+    handleAllSessionsInUse(data) {
+        if (!data.includes(types_1.SymitarCLILogin.ALL_SESSIONS_IN_USE))
+            return false;
+        if (this._loginMap.get(types_1.SymitarCLILogin.ALL_SESSIONS_IN_USE))
+            return true;
+        const match = data.match(constants_1.CLI_CONSOLE_PATTERN);
+        const console = match ? match[1] : 'Unknown Console';
+        this.logger.error(`${this.logPrefix} All sessions for console ${console} are in use`);
+        this.setError(errors_1.ERROR_MESSAGES.ALL_SESSIONS_IN_USE(console));
+        this.setState('error');
+        this._loginMap.set(types_1.SymitarCLILogin.ALL_SESSIONS_IN_USE, true);
+        return true;
+    }
     handleUnableToDedicateConsole(data) {
         if (!data.includes(types_1.SymitarCLILogin.UNABLE_TO_DEDICATE_CONSOLE))
             return false;
@@ -6521,6 +7152,8 @@ class SymitarSSHWorker {
             return true;
         if (this.handleTooManyAttempts(data))
             return true;
+        if (this.handleAllSessionsInUse(data))
+            return true;
         if (this.handleUnableToDedicateConsole(data))
             return true;
         return false;
@@ -6552,7 +7185,7 @@ class SymitarSSHWorker {
     setupScript() { }
     setupTransfer() {
         if (this.channel.fastPut) {
-            this.logger.info(`${this.logPrefix} SFTP is ready`);
+            this.logger.debug(`${this.logPrefix} SFTP is ready`);
             this.setState('ready');
         }
     }
@@ -6596,14 +7229,14 @@ exports.SymitarSSHWorker = SymitarSSHWorker;
 
 /***/ }),
 
-/***/ 85956:
+/***/ 99609:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createInitialLoginState = exports.NeedsSessionInfoState = exports.SentSymitarIdState = exports.SentWinHostSyncState = exports.SentWindowsLevelState = exports.SentPasswordState = exports.SentUsernameState = exports.LoginPromptState = exports.LoginState = void 0;
-var login_state_1 = __nccwpck_require__(53510);
+exports.createNavigationState = exports.NavigateToPrintControlState = exports.NavigateToAccountManagerState = exports.NavigateToPowerOnControlState = exports.NavigationState = exports.createInitialLoginState = exports.NeedsSessionInfoState = exports.SentSymitarIdState = exports.SentWinHostSyncState = exports.SentWindowsLevelState = exports.SentPasswordState = exports.SentUsernameState = exports.LoginPromptState = exports.LoginState = void 0;
+var login_state_1 = __nccwpck_require__(53907);
 Object.defineProperty(exports, "LoginState", ({ enumerable: true, get: function () { return login_state_1.LoginState; } }));
 Object.defineProperty(exports, "LoginPromptState", ({ enumerable: true, get: function () { return login_state_1.LoginPromptState; } }));
 Object.defineProperty(exports, "SentUsernameState", ({ enumerable: true, get: function () { return login_state_1.SentUsernameState; } }));
@@ -6613,19 +7246,25 @@ Object.defineProperty(exports, "SentWinHostSyncState", ({ enumerable: true, get:
 Object.defineProperty(exports, "SentSymitarIdState", ({ enumerable: true, get: function () { return login_state_1.SentSymitarIdState; } }));
 Object.defineProperty(exports, "NeedsSessionInfoState", ({ enumerable: true, get: function () { return login_state_1.NeedsSessionInfoState; } }));
 Object.defineProperty(exports, "createInitialLoginState", ({ enumerable: true, get: function () { return login_state_1.createInitialLoginState; } }));
+var navigation_state_1 = __nccwpck_require__(36956);
+Object.defineProperty(exports, "NavigationState", ({ enumerable: true, get: function () { return navigation_state_1.NavigationState; } }));
+Object.defineProperty(exports, "NavigateToPowerOnControlState", ({ enumerable: true, get: function () { return navigation_state_1.NavigateToPowerOnControlState; } }));
+Object.defineProperty(exports, "NavigateToAccountManagerState", ({ enumerable: true, get: function () { return navigation_state_1.NavigateToAccountManagerState; } }));
+Object.defineProperty(exports, "NavigateToPrintControlState", ({ enumerable: true, get: function () { return navigation_state_1.NavigateToPrintControlState; } }));
+Object.defineProperty(exports, "createNavigationState", ({ enumerable: true, get: function () { return navigation_state_1.createNavigationState; } }));
 //# sourceMappingURL=index.js.map
 
 /***/ }),
 
-/***/ 53510:
+/***/ 53907:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createInitialLoginState = exports.NeedsSessionInfoState = exports.SentSymitarIdState = exports.SentWinHostSyncState = exports.SentWindowsLevelState = exports.SentPasswordState = exports.SentUsernameState = exports.LoginPromptState = exports.LoginState = void 0;
-const constants_1 = __nccwpck_require__(88922);
-const ws_1 = __nccwpck_require__(23379);
+const constants_1 = __nccwpck_require__(90857);
+const ws_1 = __nccwpck_require__(94514);
 class LoginState {
 }
 exports.LoginState = LoginState;
@@ -6664,7 +7303,7 @@ class SentPasswordState extends LoginState {
             return false;
         }
         logger.debug('[SentPasswordState] Windows level prompt detected, sending config');
-        context.sendMessage(`WINDOWSLEVEL=3 LOGINHOST=${context.loginHost}`, false);
+        context.sendMessage(`WINDOWSLEVEL=3 LOGINHOST=${context.loginHost}`, false, true);
         context.setState(new SentWindowsLevelState());
         context.setWSState(ws_1.SymitarWSState.SENT_WINDOWS_LEVEL);
         return true;
@@ -6754,7 +7393,432 @@ exports.createInitialLoginState = createInitialLoginState;
 
 /***/ }),
 
-/***/ 23379:
+/***/ 36956:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.NavigateToHelpFileControlState = exports.NavigateToLetterFileControlState = exports.NavigateToBatchControlState = exports.NavigateToPrintControlState = exports.NavigateToAccountManagerState = exports.NavigateToPowerOnControlState = exports.NavigationState = void 0;
+exports.createNavigationState = createNavigationState;
+const ws_1 = __nccwpck_require__(94514);
+const ws_constants_1 = __nccwpck_require__(57253);
+class NavigationState {
+    onEnter(context, logger) {
+    }
+}
+exports.NavigationState = NavigationState;
+class NavigateToPowerOnControlState extends NavigationState {
+    targetWorkArea = ws_1.SymitarWSWorkArea.POWERON_CONTROL;
+    _sentCommand = false;
+    handle(context, data, logger) {
+        if (ws_constants_1.SymitarPatterns.WORK_AREA_POWERON.test(data)) {
+            logger.debug('[NavigateToPowerOnControl] PowerOn Control detected');
+            context.setWorkArea(ws_1.SymitarWSWorkArea.POWERON_CONTROL);
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_READY);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(true);
+            return true;
+        }
+        if (data.includes('Error=') || data.includes('Invalid')) {
+            logger.error('[NavigateToPowerOnControl] Navigation error detected');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_ERROR);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(false, 'Navigation to PowerOn Control failed');
+            return true;
+        }
+        return false;
+    }
+    onEnter(context, logger) {
+        if (!this._sentCommand) {
+            logger.debug('[NavigateToPowerOnControl] Sending navigation command');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_NAVIGATING);
+            context.sendMessage(ws_constants_1.SymitarNavigation.WORK_AREAS.POWERON_CONTROL, false);
+            this._sentCommand = true;
+        }
+    }
+}
+exports.NavigateToPowerOnControlState = NavigateToPowerOnControlState;
+class NavigateToAccountManagerState extends NavigationState {
+    targetWorkArea = ws_1.SymitarWSWorkArea.ACCOUNT_MANAGER;
+    _sentCommand = false;
+    handle(context, data, logger) {
+        if (data.includes('Account') ||
+            data.includes('Member') ||
+            data.includes('Account Number')) {
+            logger.debug('[NavigateToAccountManager] Account Manager detected');
+            context.setWorkArea(ws_1.SymitarWSWorkArea.ACCOUNT_MANAGER);
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_READY);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(true);
+            return true;
+        }
+        if (data.includes('Error') || data.includes('Invalid')) {
+            logger.error('[NavigateToAccountManager] Navigation error detected');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_ERROR);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(false, 'Navigation to Account Manager failed');
+            return true;
+        }
+        return false;
+    }
+    onEnter(context, logger) {
+        if (!this._sentCommand) {
+            logger.debug('[NavigateToAccountManager] Sending navigation command');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_NAVIGATING);
+            context.sendMessage(ws_constants_1.SymitarNavigation.WORK_AREAS.ACCOUNT_MANAGER, false);
+            this._sentCommand = true;
+        }
+    }
+}
+exports.NavigateToAccountManagerState = NavigateToAccountManagerState;
+class NavigateToPrintControlState extends NavigationState {
+    targetWorkArea = ws_1.SymitarWSWorkArea.PRINT_CONTROL;
+    _sentCommand = false;
+    handle(context, data, logger) {
+        if (ws_constants_1.SymitarPatterns.WORK_AREA_PRINT_CONTROL.test(data)) {
+            logger.debug('[NavigateToPrintControl] Print Control detected');
+            context.setWorkArea(ws_1.SymitarWSWorkArea.PRINT_CONTROL);
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_READY);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(true);
+            return true;
+        }
+        if (data.includes('Error=') || data.includes('Invalid')) {
+            logger.error('[NavigateToPrintControl] Navigation error detected');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_ERROR);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(false, 'Navigation to Print Control failed');
+            return true;
+        }
+        return false;
+    }
+    onEnter(context, logger) {
+        if (!this._sentCommand) {
+            logger.debug('[NavigateToPrintControl] Sending navigation command');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_NAVIGATING);
+            context.sendMessage(ws_constants_1.SymitarNavigation.WORK_AREAS.MANAGEMENT, false);
+            this._sentCommand = true;
+        }
+    }
+}
+exports.NavigateToPrintControlState = NavigateToPrintControlState;
+class NavigateToBatchControlState extends NavigationState {
+    targetWorkArea = ws_1.SymitarWSWorkArea.BATCH_CONTROL;
+    _sentCommand = false;
+    handle(context, data, logger) {
+        if (ws_constants_1.SymitarPatterns.WORK_AREA_BATCH_CONTROL.test(data)) {
+            logger.debug('[NavigateToBatchControl] Batch Control detected');
+            context.setWorkArea(ws_1.SymitarWSWorkArea.BATCH_CONTROL);
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_READY);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(true);
+            return true;
+        }
+        if (data.includes('Error') || data.includes('Invalid')) {
+            logger.error('[NavigateToBatchControl] Navigation error detected');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_ERROR);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(false, 'Navigation to Batch Control failed');
+            return true;
+        }
+        return false;
+    }
+    onEnter(context, logger) {
+        if (!this._sentCommand) {
+            logger.debug('[NavigateToBatchControl] Sending navigation command');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_NAVIGATING);
+            context.sendMessage(ws_constants_1.SymitarNavigation.WORK_AREAS.BATCH_CONTROL, false);
+            this._sentCommand = true;
+        }
+    }
+}
+exports.NavigateToBatchControlState = NavigateToBatchControlState;
+class NavigateToLetterFileControlState extends NavigationState {
+    targetWorkArea = ws_1.SymitarWSWorkArea.LETTERFILE_CONTROL;
+    _sentCommand = false;
+    handle(context, data, logger) {
+        if (ws_constants_1.SymitarPatterns.WORK_AREA_LETTERFILE.test(data)) {
+            logger.debug('[NavigateToLetterFileControl] LetterFile Control detected');
+            context.setWorkArea(ws_1.SymitarWSWorkArea.LETTERFILE_CONTROL);
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_READY);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(true);
+            return true;
+        }
+        if (data.includes('Error') || data.includes('Invalid')) {
+            logger.error('[NavigateToLetterFileControl] Navigation error detected');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_ERROR);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(false, 'Navigation to LetterFile Control failed');
+            return true;
+        }
+        return false;
+    }
+    onEnter(context, logger) {
+        if (!this._sentCommand) {
+            logger.debug('[NavigateToLetterFileControl] Sending navigation command');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_NAVIGATING);
+            context.sendMessage(ws_constants_1.SymitarNavigation.WORK_AREAS.LETTERFILE_CONTROL, false);
+            this._sentCommand = true;
+        }
+    }
+}
+exports.NavigateToLetterFileControlState = NavigateToLetterFileControlState;
+class NavigateToHelpFileControlState extends NavigationState {
+    targetWorkArea = ws_1.SymitarWSWorkArea.HELPFILE_CONTROL;
+    _sentCommand = false;
+    handle(context, data, logger) {
+        if (ws_constants_1.SymitarPatterns.WORK_AREA_HELPFILE.test(data)) {
+            logger.debug('[NavigateToHelpFileControl] HelpFile Control detected');
+            context.setWorkArea(ws_1.SymitarWSWorkArea.HELPFILE_CONTROL);
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_READY);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(true);
+            return true;
+        }
+        if (data.includes('Error') || data.includes('Invalid')) {
+            logger.error('[NavigateToHelpFileControl] Navigation error detected');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_ERROR);
+            context.setNavigationState(null);
+            context.signalNavigationComplete(false, 'Navigation to HelpFile Control failed');
+            return true;
+        }
+        return false;
+    }
+    onEnter(context, logger) {
+        if (!this._sentCommand) {
+            logger.debug('[NavigateToHelpFileControl] Sending navigation command');
+            context.setWSState(ws_1.SymitarWSState.SYMITAR_NAVIGATING);
+            context.sendMessage(ws_constants_1.SymitarNavigation.WORK_AREAS.HELPFILE_CONTROL, false);
+            this._sentCommand = true;
+        }
+    }
+}
+exports.NavigateToHelpFileControlState = NavigateToHelpFileControlState;
+function createNavigationState(workArea) {
+    switch (workArea) {
+        case ws_1.SymitarWSWorkArea.POWERON_CONTROL:
+            return new NavigateToPowerOnControlState();
+        case ws_1.SymitarWSWorkArea.LETTERFILE_CONTROL:
+            return new NavigateToLetterFileControlState();
+        case ws_1.SymitarWSWorkArea.HELPFILE_CONTROL:
+            return new NavigateToHelpFileControlState();
+        case ws_1.SymitarWSWorkArea.ACCOUNT_MANAGER:
+            return new NavigateToAccountManagerState();
+        case ws_1.SymitarWSWorkArea.PRINT_CONTROL:
+            return new NavigateToPrintControlState();
+        case ws_1.SymitarWSWorkArea.BATCH_CONTROL:
+            return new NavigateToBatchControlState();
+        default:
+            throw new Error(`Unknown work area: ${workArea}`);
+    }
+}
+//# sourceMappingURL=navigation.state.js.map
+
+/***/ }),
+
+/***/ 57253:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SymitarMiscInfoType = exports.SymitarFileAction = exports.SymitarNavigation = exports.SymitarHelpCodes = exports.SymitarPatterns = exports.SymitarChars = exports.SYMITAR_DELIMITER = exports.SYMITAR_MESSAGE_END = exports.SYMITAR_MESSAGE_START = void 0;
+exports.isInteractivePromptHelpCode = isInteractivePromptHelpCode;
+exports.generateMsgId = generateMsgId;
+exports.resetMsgIdCounter = resetMsgIdCounter;
+exports.buildSymitarRequest = buildSymitarRequest;
+exports.buildFileDataPacket = buildFileDataPacket;
+exports.buildFileEofPacket = buildFileEofPacket;
+exports.parseSymitarMessage = parseSymitarMessage;
+exports.extractSymitarValue = extractSymitarValue;
+exports.matchesSymitarPattern = matchesSymitarPattern;
+exports.extractHelpCode = extractHelpCode;
+exports.extractWorkArea = extractWorkArea;
+const constants_1 = __nccwpck_require__(90857);
+exports.SYMITAR_MESSAGE_START = '@begin~';
+exports.SYMITAR_MESSAGE_END = '~@end';
+exports.SYMITAR_DELIMITER = '~';
+exports.SymitarChars = {
+    BEL: '\u0007',
+    ESC: '\u001b',
+    CONTENT_START: '\u00fe',
+    CONTENT_END: '\u00fc',
+    DELIMITER: '~',
+    CR: '\r',
+    LF: '\n',
+};
+exports.SymitarPatterns = {
+    SESSION_BLOCK: /@begin~(.*?)~@end/s,
+    KEY_VALUE: /([^=~]+)=([^~]*)/g,
+    INPUT_PROMPT: /Input~HelpCode=(\d+)/,
+    WORK_AREA: /WorkArea~Name=([^~]+)/,
+    WORK_AREA_POWERON: /WorkArea~Name=PowerOn/,
+    WORK_AREA_LETTERFILE: /WorkArea~Name=LetterFileControl/,
+    WORK_AREA_HELPFILE: /WorkArea~Name=HelpFileControl/,
+    WORK_AREA_PRINT_CONTROL: /WorkArea~Name=PrintControl/,
+    WORK_AREA_ACCOUNT: /WorkArea~Name=Account/,
+    FILE_RESPONSE: /File~MsgId=([^~]+)/,
+    FILE_DONE: /File~MsgId=[^~]+~Done/,
+    FILE_EXISTS: /File~MsgId=[^~]+~Exists=(\d)/,
+    FILE_LIST_ENTRY: /File~MsgId=[^~]+~Name=([^~]+)~Size=(\d+)~Date=([^~]+)~Time=(\d+)/g,
+    SPECFILE_NO_ERROR: /SpecfileErr~Action=NoError/,
+    SPECFILE_ERROR: /SpecfileErr~Action=Error~Line=(\d+)~Message=([^~]*)/,
+    SPECFILE_DATA: /SpecfileData~Name=([^~]+)~Size=(\d+)/,
+    FILE_CONTROL_CONTINUE: /FileControl~Continue=1/,
+    DELETE_RESULT: /TextFile~Action=DeleteResult~Success=(\d)/,
+    MISC_DONE: /Misc~MsgId=[^~]+~.*~Done/,
+    PROT_ACK: /^PROT(\d{3})ACK/,
+    PROT_DATA: /^PROT(\d{3})DATA(\d{5})/,
+    PROT_EOF: /^PROT(\d{3})EOF/,
+    LOGIN_PROMPT: /login as:/,
+    PASSWORD_PROMPT: /'s Password:/,
+    WINDOWS_LEVEL_ECHO: /WINDOWSLEVEL=\d+.*CONNECTIONTYPE=/,
+    SYM_DOWNLOAD_SYNC: /SymDownloadSync~Global/,
+    SYM_LOGON_USER: /SymLogonUserLoggedIn/,
+    WORK_AREA_BATCH_CONTROL: /WorkArea~Name=BatchControl/,
+    BATCH_QUEUEING_START: /Batch~Action=QueueingStart/,
+    BATCH_QUEUEING_DONE: /Batch~Action=QueueingDone/,
+    BATCH_QUEUE_ENTRY: /Misc~MsgId=([^~]+)~Action=QueueEntry~Seq=(\d+)~Queue=(\d+).*~Job=([^~]+)/,
+    BATCH_QUEUE_EMPTY: /Misc~MsgId=([^~]+)~Action=QueueEmpty~Queue=(\d+)/,
+    INPUT_PROMPT_FULL: /Input~HelpCode=(\d+)~Prompt=([^~]*)~DataType=(\d+)~MaxCodeLen=(\d+)~Default=([^~]*)/,
+    REPORT_LIST_ENTRY: /File~MsgId=[^~]+~Sequence=(\d+)~Title=([^~]*)~Forms=[^~]*~Size=(\d+)~PageCount=(\d+)~BatchSeq=(\d+)~Date=(\d+)~Time=(\d+)~PrintCount=(\d+)~TapeCount=(\d+)~Category=([^~\u00fc]*)/g,
+    REPORT_LIST_DONE: /File~MsgId=[^~]+~More=(\d)~Done/,
+    REPORT_CONTENT_LINE: /File~MsgId=[^~]+\u00fd([^\u00fe\u00fc]*)\u00fe/g,
+    REPORT_RETRIEVE_DONE: /File~MsgId=[^~]+~Filesize=(\d+)~Done/,
+};
+exports.SymitarHelpCodes = {
+    INITIAL_LOGIN: 10025,
+    SYMITAR_CREDENTIALS: 10002,
+    CONFIRMATION_PROMPT: 10004,
+    MAIN_MENU: 10202,
+    FILENAME_PROMPT: 10804,
+    POWERON_MENU: 11801,
+    POWERON_INSTALL_CONFIRM: 11810,
+    LETTERFILE_MENU: 10801,
+    HELPFILE_MENU: 10802,
+    BATCH_QUEUE_ACTION: 10101,
+    BATCH_CONTROL_MENU: 10102,
+    BATCH_QUEUE_SELECTION: 10104,
+    BATCH_OPTIONS: 10110,
+    BATCH_SPECFILE_PROMPT: 20301,
+    PRINT_CONTROL_MENU: 10301,
+    POWERON_PROMPT_NUMBER: 11802,
+    POWERON_PROMPT_RATE: 11803,
+    POWERON_PROMPT_CODE: 11804,
+    POWERON_PROMPT_MONEY: 11805,
+    POWERON_PROMPT_CHARACTER: 11806,
+    POWERON_PROMPT_YESNO: 11807,
+    POWERON_PROMPT_DATE: 11808,
+};
+function isInteractivePromptHelpCode(helpCode) {
+    return helpCode >= 11800 && helpCode < 11900;
+}
+exports.SymitarNavigation = {
+    WORK_AREAS: {
+        POWERON_CONTROL: `mm3${constants_1.ESC}`,
+        LETTERFILE_CONTROL: `mm4${constants_1.ESC}`,
+        HELPFILE_CONTROL: `mm5${constants_1.ESC}`,
+        ACCOUNT_MANAGER: `m1${constants_1.ESC}`,
+        MANAGEMENT: `MM1${constants_1.ESC}`,
+        BATCH_CONTROL: `MM0${constants_1.ESC}`,
+    },
+    POWERON_MENU: {
+        VALIDATE: '7\r',
+        INSTALL: '8\r',
+        UNINSTALL: '10\r',
+    },
+    BATCH_MENU: {
+        QUEUE_ACTION: '1\r',
+        EXECUTE_POWERON: '11\r',
+    },
+};
+exports.SymitarFileAction = {
+    LIST: 'List',
+    EXISTS: 'Exists',
+    STORE: 'Store',
+    RETRIEVE: 'Retrieve',
+    DELETE: 'Delete',
+};
+exports.SymitarMiscInfoType = {
+    MODULES_ENABLED: 'ModulesEnabled',
+    CONSOLE_NUMBER: 'ConsoleNumber',
+    BANKING_DATE: 'BankingDate',
+    SEC_PRIV: 'SecPriv',
+    LAST_LOGIN: 'LastLogin',
+    COPYRIGHT_NOTICE: 'CopyrightNotice',
+    APPS_QUEUED: 'AppsQueued',
+};
+let messageIdCounter = 0;
+function generateMsgId() {
+    messageIdCounter++;
+    return String(messageIdCounter).padStart(7, '0');
+}
+function resetMsgIdCounter() {
+    messageIdCounter = 0;
+}
+function buildSymitarRequest(messageType, params, msgId) {
+    const id = msgId ?? generateMsgId();
+    const pairs = Object.entries(params)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(exports.SYMITAR_DELIMITER);
+    const content = `${messageType}~${pairs}~MsgId=${id}`;
+    const length = content.length;
+    return `${exports.SymitarChars.BEL}${length}${exports.SymitarChars.CR}${content}`;
+}
+function buildFileDataPacket(sequence, content) {
+    const seq = String(sequence).padStart(3, '0');
+    const size = String(content.length).padStart(5, '0');
+    return `PROT${seq}DATA${size}${content}`;
+}
+function buildFileEofPacket(sequence) {
+    const seq = String(sequence).padStart(3, '0');
+    return `PROT${seq}EOF      `;
+}
+function parseSymitarMessage(message) {
+    const blockMatch = message.match(exports.SymitarPatterns.SESSION_BLOCK);
+    if (blockMatch) {
+        return parseDelimitedPairs(blockMatch[1]);
+    }
+    if (message.includes(exports.SYMITAR_DELIMITER)) {
+        return parseDelimitedPairs(message);
+    }
+    return null;
+}
+function parseDelimitedPairs(content) {
+    const pairs = {};
+    const parts = content.split(exports.SYMITAR_DELIMITER);
+    for (const part of parts) {
+        const eqIndex = part.indexOf('=');
+        if (eqIndex > 0) {
+            const key = part.substring(0, eqIndex);
+            const value = part.substring(eqIndex + 1);
+            pairs[key] = value;
+        }
+    }
+    return pairs;
+}
+function extractSymitarValue(message, key) {
+    const pairs = parseSymitarMessage(message);
+    return pairs?.[key];
+}
+function matchesSymitarPattern(message, pattern) {
+    return pattern.test(message);
+}
+function extractHelpCode(message) {
+    const match = message.match(exports.SymitarPatterns.INPUT_PROMPT);
+    return match ? parseInt(match[1], 10) : undefined;
+}
+function extractWorkArea(message) {
+    const match = message.match(exports.SymitarPatterns.WORK_AREA);
+    return match ? match[1] : undefined;
+}
+//# sourceMappingURL=ws.constants.js.map
+
+/***/ }),
+
+/***/ 73599:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -6763,14 +7827,1480 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SymitarWS = exports.SymitarWSWorkArea = exports.SymitarWSState = exports.SymitarWSPatterns = void 0;
+exports.listFiles = listFiles;
+exports.fileExists = fileExists;
+exports.storeFile = storeFile;
+exports.deleteFile = deleteFile;
+exports.retrieveFile = retrieveFile;
+exports.deployFiles = deployFiles;
+exports.removeFiles = removeFiles;
+exports.downloadFile = downloadFile;
+const types_1 = __nccwpck_require__(19233);
+const ws_constants_1 = __nccwpck_require__(57253);
+const ws_types_1 = __nccwpck_require__(52565);
+const line_endings_1 = __nccwpck_require__(74689);
+const fs_1 = __importDefault(__nccwpck_require__(79896));
+const path_1 = __importDefault(__nccwpck_require__(16928));
+function getWorkAreaForFileType(fileType) {
+    switch (fileType) {
+        case types_1.SymitarFileType.POWERON:
+        case types_1.SymitarFileType.POWERON_INSTALLED:
+            return ws_types_1.SymitarWSWorkArea.POWERON_CONTROL;
+        case types_1.SymitarFileType.LETTERFILE:
+            return ws_types_1.SymitarWSWorkArea.LETTERFILE_CONTROL;
+        case types_1.SymitarFileType.HELPFILE:
+            return ws_types_1.SymitarWSWorkArea.HELPFILE_CONTROL;
+        case types_1.SymitarFileType.DATAFILE:
+            throw new Error(`DATAFILE work area not yet supported. Recordings needed.`);
+        default:
+            throw new Error(`Unknown file type: ${fileType}`);
+    }
+}
+async function ensureWorkArea(ctx, fileType) {
+    const requiredWorkArea = getWorkAreaForFileType(fileType);
+    if (ctx.getCurrentWorkArea() !== requiredWorkArea) {
+        await ctx.navigateToWorkArea(requiredWorkArea);
+    }
+}
+async function listFiles(ctx, fileType = types_1.SymitarFileType.POWERON) {
+    await ensureWorkArea(ctx, fileType);
+    const wsFileType = (0, ws_types_1.toWSProtocolFileType)(fileType);
+    const msgId = ctx.getNextMsgId();
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Action: 'List',
+        Type: wsFileType,
+        Name: '+',
+    }, msgId);
+    ctx.sendMessage(request, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'));
+    const files = [];
+    const pattern = /File~MsgId=[^~]+~Name=([^~]+)~Size=(\d+)~Date=([^~]+)~Time=(\d+)/g;
+    let match;
+    while ((match = pattern.exec(response)) !== null) {
+        files.push({
+            name: match[1],
+            size: parseInt(match[2], 10),
+            date: match[3],
+            time: match[4],
+        });
+    }
+    ctx.logger.info(`${ctx.logPrefix} Listed ${files.length} files of type ${fileType}`);
+    return files;
+}
+async function fileExists(ctx, fileName, fileType = types_1.SymitarFileType.POWERON) {
+    await ensureWorkArea(ctx, fileType);
+    const wsFileType = (0, ws_types_1.toWSProtocolFileType)(fileType);
+    const msgId = ctx.getNextMsgId();
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Action: 'Exists',
+        Type: wsFileType,
+        Name: fileName,
+    }, msgId);
+    ctx.sendMessage(request, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Exists='));
+    const match = response.match(ws_constants_1.SymitarPatterns.FILE_EXISTS);
+    return match?.[1] === '1';
+}
+async function storeFile(ctx, fileName, content, fileType = types_1.SymitarFileType.POWERON) {
+    await ensureWorkArea(ctx, fileType);
+    const normalizedContent = (0, line_endings_1.normalizeStringLineEndings)(content);
+    const wsFileType = (0, ws_types_1.toWSProtocolFileType)(fileType);
+    const msgId = ctx.getNextMsgId();
+    const size = Buffer.byteLength(normalizedContent, 'utf8');
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Name: fileName,
+        Type: wsFileType,
+        Size: size.toString(),
+        Action: 'Store',
+        Context: '',
+    }, msgId);
+    ctx.sendMessage(request, false);
+    await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('MaxBuff='));
+    const dataPacket = (0, ws_constants_1.buildFileDataPacket)(0, normalizedContent);
+    ctx.sendMessage(dataPacket, false);
+    await ctx.waitForMessage((msg) => ws_constants_1.SymitarPatterns.PROT_ACK.test(msg));
+    const eofPacket = (0, ws_constants_1.buildFileEofPacket)(1);
+    ctx.sendMessage(eofPacket, false);
+    await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'));
+    ctx.logger.info(`${ctx.logPrefix} Stored file: ${fileName} (${fileType})`);
+}
+async function deleteFile(ctx, fileName, fileType = types_1.SymitarFileType.POWERON) {
+    await ensureWorkArea(ctx, fileType);
+    const wsFileType = (0, ws_types_1.toWSProtocolFileType)(fileType);
+    const msgId = ctx.getNextMsgId();
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Type: wsFileType,
+        Action: 'Delete',
+        Name: fileName,
+    }, msgId);
+    ctx.sendMessage(request, false);
+    await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'));
+    ctx.logger.info(`${ctx.logPrefix} Deleted file: ${fileName} (${fileType})`);
+}
+async function retrieveFile(ctx, fileName, fileType = types_1.SymitarFileType.POWERON) {
+    await ensureWorkArea(ctx, fileType);
+    const wsFileType = (0, ws_types_1.toWSProtocolFileType)(fileType);
+    const msgId = ctx.getNextMsgId();
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Action: 'Retrieve',
+        Type: wsFileType,
+        Name: fileName,
+    }, msgId);
+    ctx.sendMessage(request, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) &&
+        (msg.includes('Done') ||
+            msg.includes('Error') ||
+            msg.includes('Status=')));
+    if (response.includes('No such file or directory') ||
+        response.includes('Status=Unable')) {
+        return null;
+    }
+    const contentStartPattern = new RegExp(`File~MsgId=${msgId}[\u00fe\ufffd]`);
+    const startMatch = response.match(contentStartPattern);
+    if (startMatch && startMatch.index !== undefined) {
+        const contentStart = startMatch.index + startMatch[0].length;
+        let contentEnd = response.indexOf('\u00fc', contentStart);
+        if (contentEnd === -1) {
+            contentEnd = response.indexOf('\ufffd\ufffd', contentStart);
+        }
+        if (contentEnd === -1) {
+            const filesizeIdx = response.indexOf(`File~MsgId=${msgId}~Filesize=`, contentStart);
+            if (filesizeIdx > contentStart) {
+                contentEnd = filesizeIdx;
+                while (contentEnd > contentStart &&
+                    (response[contentEnd - 1] === '\u00fc' ||
+                        response[contentEnd - 1] === '\ufffd' ||
+                        response[contentEnd - 1] === '\u001b')) {
+                    contentEnd--;
+                }
+            }
+        }
+        if (contentEnd > contentStart) {
+            return response.slice(contentStart, contentEnd);
+        }
+    }
+    const fallbackMatch = response.match(/File~MsgId=\d+[\u00fe\ufffd]([\s\S]*?)[\u00fc\ufffd]+.*?File~MsgId=\d+~Filesize=\d+~Done/);
+    if (fallbackMatch) {
+        return fallbackMatch[1];
+    }
+    ctx.logger.warn(`${ctx.logPrefix} Could not parse file content for: ${fileName}`);
+    return null;
+}
+async function deployFiles(ctx, fileType, files) {
+    await ensureWorkArea(ctx, fileType);
+    ctx.logger.info(`${ctx.logPrefix} Deploying ${files.length} file(s) of type ${fileType}...`);
+    const results = [];
+    for (const file of files) {
+        const fileName = file.remoteFileName ||
+            (file.localFilePath ? path_1.default.basename(file.localFilePath) : undefined);
+        if (!fileName) {
+            results.push({
+                fileName: '(unknown)',
+                success: false,
+                error: 'Either remoteFileName or localFilePath must be provided',
+            });
+            continue;
+        }
+        try {
+            const content = file.content ??
+                (file.localFilePath
+                    ? fs_1.default.readFileSync(file.localFilePath, 'utf8')
+                    : undefined);
+            if (!content) {
+                throw new Error('Either content or localFilePath must be provided');
+            }
+            const normalizedContent = (0, line_endings_1.normalizeStringLineEndings)(content);
+            const wsFileType = (0, ws_types_1.toWSProtocolFileType)(fileType);
+            const msgId = ctx.getNextMsgId();
+            const size = Buffer.byteLength(normalizedContent, 'utf8');
+            const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+                Name: fileName,
+                Type: wsFileType,
+                Size: size.toString(),
+                Action: 'Store',
+                Context: '',
+            }, msgId);
+            ctx.sendMessage(request, false);
+            await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('MaxBuff='));
+            const dataPacket = (0, ws_constants_1.buildFileDataPacket)(0, normalizedContent);
+            ctx.sendMessage(dataPacket, false);
+            await ctx.waitForMessage((msg) => ws_constants_1.SymitarPatterns.PROT_ACK.test(msg));
+            const eofPacket = (0, ws_constants_1.buildFileEofPacket)(1);
+            ctx.sendMessage(eofPacket, false);
+            await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'));
+            results.push({ fileName, success: true });
+        }
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            ctx.logger.error(`${ctx.logPrefix} Failed to deploy ${fileName}: ${errorMessage}`);
+            results.push({ fileName, success: false, error: errorMessage });
+        }
+    }
+    const successCount = results.filter((r) => r.success).length;
+    ctx.logger.info(`${ctx.logPrefix} Deployed ${successCount}/${files.length} file(s)`);
+    return results;
+}
+async function removeFiles(ctx, fileType, fileNames) {
+    await ensureWorkArea(ctx, fileType);
+    ctx.logger.info(`${ctx.logPrefix} Removing ${fileNames.length} file(s) of type ${fileType}...`);
+    const results = [];
+    for (const fileName of fileNames) {
+        try {
+            const wsFileType = (0, ws_types_1.toWSProtocolFileType)(fileType);
+            const msgId = ctx.getNextMsgId();
+            const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+                Type: wsFileType,
+                Action: 'Delete',
+                Name: fileName,
+            }, msgId);
+            ctx.sendMessage(request, false);
+            await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'));
+            results.push({ fileName, success: true });
+        }
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            ctx.logger.error(`${ctx.logPrefix} Failed to remove ${fileName}: ${errorMessage}`);
+            results.push({ fileName, success: false, error: errorMessage });
+        }
+    }
+    const successCount = results.filter((r) => r.success).length;
+    ctx.logger.info(`${ctx.logPrefix} Removed ${successCount}/${fileNames.length} file(s)`);
+    return results;
+}
+async function downloadFile(ctx, fileType, fileName) {
+    return retrieveFile(ctx, fileName, fileType);
+}
+//# sourceMappingURL=ws.files.js.map
+
+/***/ }),
+
+/***/ 94514:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SymitarWS = exports.SymitarWSPatterns = exports.SymitarWSWorkArea = exports.SymitarWSState = void 0;
 const os_1 = __importDefault(__nccwpck_require__(70857));
-const ws_1 = __importDefault(__nccwpck_require__(33449));
-const helpers_1 = __nccwpck_require__(73878);
-const constants_1 = __nccwpck_require__(88922);
-const logging_1 = __nccwpck_require__(6358);
+const ws_1 = __importDefault(__nccwpck_require__(13492));
+const helpers_1 = __nccwpck_require__(56177);
+const types_1 = __nccwpck_require__(19233);
+const constants_1 = __nccwpck_require__(90857);
+const logging_1 = __nccwpck_require__(37533);
 const rxjs_1 = __nccwpck_require__(17828);
-const states_1 = __nccwpck_require__(85956);
+const states_1 = __nccwpck_require__(99609);
+const ws_constants_1 = __nccwpck_require__(57253);
+const ws_types_1 = __nccwpck_require__(52565);
+const PowerOn = __importStar(__nccwpck_require__(40012));
+const Files = __importStar(__nccwpck_require__(73599));
+const Reports = __importStar(__nccwpck_require__(5495));
+const Sync = __importStar(__nccwpck_require__(15638));
+const ssh_1 = __nccwpck_require__(8908);
+var ws_types_2 = __nccwpck_require__(52565);
+Object.defineProperty(exports, "SymitarWSState", ({ enumerable: true, get: function () { return ws_types_2.SymitarWSState; } }));
+Object.defineProperty(exports, "SymitarWSWorkArea", ({ enumerable: true, get: function () { return ws_types_2.SymitarWSWorkArea; } }));
+Object.defineProperty(exports, "SymitarWSPatterns", ({ enumerable: true, get: function () { return ws_types_2.SymitarWSPatterns; } }));
+class SymitarWS {
+    _ws;
+    _sessionInfo = {};
+    _msgId = 1000000;
+    _loginState = null;
+    _navigationState = null;
+    _connectionLost = false;
+    _baseUrl;
+    _logLevel;
+    _customLogger;
+    _sshClient = null;
+    _sshConfig;
+    _logPrefix = '[SymitarWS]';
+    _logger;
+    get logPrefix() {
+        return this._logPrefix;
+    }
+    get logger() {
+        return this._logger;
+    }
+    _loginHost = os_1.default.hostname();
+    _loginHostIP = '127.0.0.1';
+    _error$ = new rxjs_1.BehaviorSubject(null);
+    _state$ = new rxjs_1.BehaviorSubject(ws_types_1.SymitarWSState.LOGIN_PROMPT);
+    _workArea$ = new rxjs_1.BehaviorSubject(null);
+    _message$ = new rxjs_1.Subject();
+    _navigationComplete$ = new rxjs_1.Subject();
+    get _nextMsgId() {
+        return (this._msgId++).toString();
+    }
+    getNextMsgId() {
+        return this._nextMsgId;
+    }
+    get _currentState() {
+        return this._state$.value;
+    }
+    get _currentError() {
+        return this._error$.value;
+    }
+    _host;
+    _config;
+    get config() {
+        return this._config;
+    }
+    get loginHost() {
+        return this._loginHost;
+    }
+    get state$() {
+        return this._state$.asObservable();
+    }
+    get workArea$() {
+        return this._workArea$.asObservable();
+    }
+    get message$() {
+        return this._message$.asObservable();
+    }
+    get error$() {
+        return this._error$.asObservable();
+    }
+    get sessionInfo() {
+        return this._sessionInfo;
+    }
+    get consoleNumber() {
+        return this._sessionInfo.ConsoleNumber;
+    }
+    constructor(baseUrl, config, logLevel = 'info', sshConfig, options, customLogger) {
+        this._config = config;
+        this._baseUrl = baseUrl;
+        this._logLevel = logLevel;
+        this._customLogger = customLogger;
+        this._sshConfig = sshConfig;
+        this._host = new URL(baseUrl).hostname;
+        this._logger = (0, logging_1.createLogger)(logLevel, customLogger);
+        if (!this._config.aixUsername || !this._config.aixPassword) {
+            this._logger.error(`${this._logPrefix} AIX username and password are required`);
+            throw new Error('AIX username and password are required');
+        }
+        if (options?.sshClient) {
+            this._sshClient = options.sshClient;
+        }
+        else if (sshConfig) {
+            this._sshClient = new ssh_1.SymitarSSH({
+                host: this._host,
+                ...sshConfig,
+            }, logLevel, customLogger);
+        }
+        this._setupConnection();
+    }
+    _setupConnection() {
+        this._loginState = (0, states_1.createInitialLoginState)();
+        this._navigationState = null;
+        this._sessionInfo = {};
+        this._msgId = 1000000;
+        this._connectionLost = false;
+        this._state$.next(ws_types_1.SymitarWSState.LOGIN_PROMPT);
+        this._workArea$.next(null);
+        this._error$.next(null);
+        const wsHeaders = {
+            connectiontype: '5',
+            institutionid: 'SYMITAR',
+            ishostdownload: 'False',
+            isvirtual: 'False',
+            port: '-1',
+            profile: 'TEST',
+            server: this._host,
+            symnumber: (0, helpers_1.paddedSymNumber)(this._config.symNumber),
+            loginhost: this._loginHost,
+            loginhostip: '127.0.0.1',
+        };
+        this._logger.debug(`${this._logPrefix} WebSocket headers:`);
+        for (const [key, value] of Object.entries(wsHeaders)) {
+            this._logger.debug(`${this._logPrefix}   ${key}: ${value}`);
+        }
+        this._ws = new ws_1.default(`${this._baseUrl}/quest`, {
+            headers: wsHeaders,
+            rejectUnauthorized: false,
+        });
+        this._ws.on('open', () => {
+            this._logger.info(`${this._logPrefix} Connected to Symitar at ${this._baseUrl}/quest`);
+        });
+        this._ws.on('message', (data) => {
+            const message = data.toString();
+            this._logger.debug(`${this._logPrefix} < ${(0, logging_1.sanitizeForLogging)(message)}`);
+            this._message$.next(message);
+            const logonErrorMatch = message.match(/SymLogonError~Text=([^~]+)/);
+            if (logonErrorMatch) {
+                const errorText = logonErrorMatch[1].trim();
+                this._logger.error(`${this._logPrefix} Login error: ${errorText}`);
+                this._error$.next(errorText);
+                this._state$.next(ws_types_1.SymitarWSState.SYMITAR_ERROR);
+                this._connectionLost = true;
+                this._ws.close();
+                return;
+            }
+            if (message.includes('SymLogoffReason~Text=')) {
+                const reasonMatch = message.match(/SymLogoffReason~Text=([^~]+)/);
+                const reason = reasonMatch ? reasonMatch[1] : 'Unknown reason';
+                this._logger.warn(`${this._logPrefix} Session terminated: ${reason}`);
+                this._error$.next(`Session terminated: ${reason}`);
+                this._state$.next(ws_types_1.SymitarWSState.SYMITAR_ERROR);
+                this._connectionLost = true;
+                this._ws.close();
+                return;
+            }
+            if (message.includes('SymShutdown~Global')) {
+                this._logger.warn(`${this._logPrefix} Server shutdown received`);
+                this._state$.next(ws_types_1.SymitarWSState.SYMITAR_ERROR);
+                this._connectionLost = true;
+                this._ws.close();
+                return;
+            }
+            if (this._currentState <= ws_types_1.SymitarWSState.NEEDS_SESSION_INFO) {
+                this._handleLoginPrompts(message);
+            }
+            else if (this._navigationState) {
+                this._handleNavigation(message);
+            }
+        });
+        this._ws.on('error', (error) => {
+            this._logger.error(`${this._logPrefix} WebSocket error: ${error.message}`);
+            this._connectionLost = true;
+        });
+        this._ws.on('close', () => {
+            this._logger.debug(`${this._logPrefix} WebSocket connection closed`);
+            if (this._currentState !== ws_types_1.SymitarWSState.SYMITAR_ERROR) {
+                this._connectionLost = true;
+            }
+        });
+    }
+    isConnected() {
+        return (this._ws.readyState === ws_1.default.OPEN &&
+            !this._connectionLost &&
+            this._currentState === ws_types_1.SymitarWSState.SYMITAR_READY);
+    }
+    hasConnectionLost() {
+        return this._connectionLost;
+    }
+    async reconnect(timeoutMs = 10000) {
+        this._logger.info(`${this._logPrefix} Attempting to reconnect...`);
+        try {
+            if (this._ws.readyState === ws_1.default.OPEN) {
+                const buffer = Buffer.from(`l${constants_1.ESC}`, 'ascii');
+                this._ws.send(buffer);
+                await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            if (this._ws.readyState === ws_1.default.OPEN ||
+                this._ws.readyState === ws_1.default.CONNECTING) {
+                this._ws.close();
+            }
+        }
+        catch {
+        }
+        this._setupConnection();
+        await this.isReady(timeoutMs);
+        this._logger.info(`${this._logPrefix} Reconnection successful`);
+    }
+    _handleLoginPrompts(data) {
+        if (typeof data !== 'string')
+            return;
+        if (!this._loginState)
+            return;
+        const rejectionMatch = data.match(/Connections not allowed from:\s*(\S+)/);
+        if (rejectionMatch) {
+            const hostname = rejectionMatch[1];
+            const errorMsg = `Connection rejected: Host "${hostname}" is not allowed to connect to this Symitar server`;
+            this._logger.error(`${this._logPrefix} ${errorMsg}`);
+            this._error$.next(errorMsg);
+            this._state$.next(ws_types_1.SymitarWSState.SYMITAR_ERROR);
+            this._ws.close();
+            return;
+        }
+        this._loginState.handle(this, data, this._logger);
+    }
+    _handleNavigation(data) {
+        if (typeof data !== 'string')
+            return;
+        if (!this._navigationState)
+            return;
+        this._navigationState.handle(this, data, this._logger);
+    }
+    setState(state) {
+        this._loginState = state;
+    }
+    setWSState(state) {
+        this._state$.next(state);
+    }
+    setWorkArea(workArea) {
+        this._workArea$.next(workArea);
+    }
+    setSessionInfo(key, value) {
+        this._sessionInfo[key] = value;
+    }
+    sendMessage(message, includeCR = true, includeNewline = false) {
+        this._logger.debug(`${this._logPrefix} > ${(0, logging_1.sanitizeForLogging)(message)}`);
+        const buffer = Buffer.from(message + `${includeCR ? '\r' : ''}${includeNewline ? '\n' : ''}`, 'ascii');
+        this._ws.send(buffer);
+    }
+    setNavigationState(state) {
+        this._navigationState = state;
+    }
+    signalNavigationComplete(success, error) {
+        this._navigationComplete$.next({ success, error });
+    }
+    getCurrentWorkArea() {
+        return this._workArea$.value;
+    }
+    async navigateToWorkArea(workArea, timeoutMs = 10000) {
+        if (this._workArea$.value === workArea) {
+            this._logger.debug(`${this._logPrefix} Already in work area: ${workArea}`);
+            return;
+        }
+        if (this._currentState !== ws_types_1.SymitarWSState.SYMITAR_READY) {
+            throw new Error(`Cannot navigate: client is not ready (state: ${ws_types_1.SymitarWSState[this._currentState]})`);
+        }
+        this._logger.info(`${this._logPrefix} Navigating to work area: ${workArea}`);
+        const navState = (0, states_1.createNavigationState)(workArea);
+        this.setNavigationState(navState);
+        navState.onEnter(this, this._logger);
+        const result = await (0, rxjs_1.firstValueFrom)(this._navigationComplete$.pipe((0, rxjs_1.timeout)(timeoutMs)));
+        if (!result.success) {
+            throw new Error(result.error || 'Navigation failed');
+        }
+        this._logger.info(`${this._logPrefix} Successfully navigated to: ${workArea}`);
+    }
+    waitForMessage(match, timeoutMS = 10000) {
+        return new Promise((res, rej) => {
+            const timeout = setTimeout(() => {
+                this._ws.off('message', handler);
+                rej(new Error(`Timeout waiting for response (${timeoutMS}ms)`));
+            }, timeoutMS);
+            const handler = (data) => {
+                const message = data.toString();
+                if (match(message)) {
+                    clearTimeout(timeout);
+                    this._ws.off('message', handler);
+                    res(message);
+                }
+            };
+            this._ws.on('message', handler);
+        });
+    }
+    async isReady(timeoutInMS = 10000) {
+        this._logger.debug(`${this._logPrefix} Waiting for Symitar to be ready...`);
+        await (0, rxjs_1.firstValueFrom)(this.state$.pipe((0, rxjs_1.startWith)(this._state$.value), (0, rxjs_1.tap)((state) => {
+            if (state === ws_types_1.SymitarWSState.SYMITAR_ERROR) {
+                this._logger.error(`${this._logPrefix} Symitar is in an error state`);
+                throw new Error(this._currentError || 'An unknown Symitar error occurred');
+            }
+        }), (0, rxjs_1.filter)((state) => state === ws_types_1.SymitarWSState.SYMITAR_READY), (0, rxjs_1.timeout)(timeoutInMS)));
+        this._logger.debug(`${this._logPrefix} Symitar is ready`);
+        await this._fetchSessionMetadata();
+    }
+    async _fetchSessionMetadata() {
+        try {
+            const msgId = this._nextMsgId;
+            const request = (0, ws_constants_1.buildSymitarRequest)('Misc', {
+                InfoType: 'ConsoleNumber',
+            }, msgId);
+            this.sendMessage(request, false);
+            const response = await this.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('ConsoleNumber='), 5000);
+            const match = response.match(/ConsoleNumber=(\d+)/);
+            if (match) {
+                this._sessionInfo.ConsoleNumber = match[1];
+                this._logger.debug(`${this._logPrefix} Console number: ${match[1]}`);
+            }
+        }
+        catch (error) {
+            this._logger.warn(`${this._logPrefix} Failed to fetch session metadata: ${error}`);
+        }
+    }
+    async end() {
+        if (this._sshClient) {
+            try {
+                await this._sshClient.end();
+            }
+            catch (err) {
+                this._logger.warn(`${this._logPrefix} Error closing SSH client: ${err}`);
+            }
+        }
+        if (this._ws.readyState === ws_1.default.CLOSED ||
+            this._ws.readyState === ws_1.default.CLOSING) {
+            return;
+        }
+        if (this._ws.readyState === ws_1.default.OPEN) {
+            this._logger.debug(`${this._logPrefix} Sending logout command`);
+            try {
+                const buffer = Buffer.from(`l${constants_1.ESC}`, 'ascii');
+                this._ws.send(buffer);
+                await this.waitForMessage((msg) => msg.includes('SymShutdown~Global'), 5000);
+                this._logger.debug(`${this._logPrefix} Logout confirmed by server`);
+            }
+            catch {
+                this._logger.warn(`${this._logPrefix} Logout confirmation timeout, closing anyway`);
+            }
+        }
+        this._ws.close();
+    }
+    forceClose() {
+        this._ws.close();
+    }
+    listFiles(fileType) {
+        return Files.listFiles(this, fileType);
+    }
+    async listPowerOns() {
+        const files = await Files.listFiles(this, types_1.SymitarFileType.POWERON_INSTALLED);
+        return files.map((f) => f.name);
+    }
+    poweronExists(fileName) {
+        return Files.fileExists(this, fileName, types_1.SymitarFileType.POWERON);
+    }
+    deployPowerOn(fileName, content) {
+        return Files.storeFile(this, fileName, content, types_1.SymitarFileType.POWERON);
+    }
+    deletePowerOn(fileName) {
+        return Files.deleteFile(this, fileName, types_1.SymitarFileType.POWERON);
+    }
+    downloadPowerOn(fileName) {
+        return Files.retrieveFile(this, fileName, types_1.SymitarFileType.POWERON);
+    }
+    downloadFile(type, fileName) {
+        return Files.downloadFile(this, type, fileName);
+    }
+    deployFiles(type, files) {
+        return Files.deployFiles(this, type, files);
+    }
+    removeFiles(type, fileNames) {
+        return Files.removeFiles(this, type, fileNames);
+    }
+    validatePowerOn(fileName) {
+        return PowerOn.validatePowerOn(this, fileName);
+    }
+    validatePowerOnOffline(content, originalFileName) {
+        return PowerOn.validatePowerOnOffline(this, content, originalFileName);
+    }
+    installPowerOn(fileName) {
+        return PowerOn.installPowerOn(this, fileName);
+    }
+    uninstallPowerOn(fileName) {
+        return PowerOn.uninstallPowerOn(this, fileName);
+    }
+    executePowerOn(fileName, options) {
+        return PowerOn.executePowerOn(this, fileName, options);
+    }
+    fileExists(fileName, fileType = types_1.SymitarFileType.POWERON) {
+        return Files.fileExists(this, fileName, fileType);
+    }
+    storeFile(fileName, content, fileType = types_1.SymitarFileType.POWERON) {
+        return Files.storeFile(this, fileName, content, fileType);
+    }
+    deleteFile(fileName, fileType = types_1.SymitarFileType.POWERON) {
+        return Files.deleteFile(this, fileName, fileType);
+    }
+    retrieveFile(fileName, fileType = types_1.SymitarFileType.POWERON) {
+        return Files.retrieveFile(this, fileName, fileType);
+    }
+    listReports(count = 20, titleFilter) {
+        return Reports.listReports(this, count, titleFilter);
+    }
+    getReportBySequence(sequence) {
+        return Reports.getReportBySequence(this, sequence);
+    }
+    retrieveReport(sequence) {
+        return Reports.retrieveReport(this, sequence);
+    }
+    findReportSequences(powerOnName, options) {
+        return Reports.findReportSequences(this, powerOnName, options);
+    }
+    findReportsByBatchSeq(batchSeq, maxResults) {
+        return Reports.findReportsByBatchSeq(this, batchSeq, maxResults);
+    }
+    async getChangedFiles(localDirectory, remoteDirectory = types_1.SymitarSyncDirectory.REPWRITERSPECS, syncMode = types_1.SymitarSyncMode.MIRROR, options = {}) {
+        if (!this._sshClient || !this._sshConfig) {
+            throw new Error('SSH configuration required for getChangedFiles');
+        }
+        return this._sshClient.getChangedFiles(this._config, localDirectory, remoteDirectory, syncMode, options);
+    }
+    async syncFiles(localDirectory, remoteDirectory, syncMode, options, isDryRun = true) {
+        if (!this._sshClient || !this._sshConfig) {
+            throw new Error('SSH configuration required for syncFiles');
+        }
+        return Sync.syncFiles({ host: this._host, ...this._sshConfig }, this._config, this, localDirectory, remoteDirectory, syncMode, isDryRun, this._logger, options);
+    }
+}
+exports.SymitarWS = SymitarWS;
+//# sourceMappingURL=ws.js.map
+
+/***/ }),
+
+/***/ 40012:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.validatePowerOn = validatePowerOn;
+exports.validatePowerOnOffline = validatePowerOnOffline;
+exports.installPowerOn = installPowerOn;
+exports.uninstallPowerOn = uninstallPowerOn;
+exports.executePowerOn = executePowerOn;
+const helpers_1 = __nccwpck_require__(56177);
+const ws_constants_1 = __nccwpck_require__(57253);
+const ws_types_1 = __nccwpck_require__(52565);
+const Files = __importStar(__nccwpck_require__(73599));
+async function ensurePowerOnControl(ctx) {
+    if (ctx.getCurrentWorkArea() !== ws_types_1.SymitarWSWorkArea.POWERON_CONTROL) {
+        await ctx.navigateToWorkArea(ws_types_1.SymitarWSWorkArea.POWERON_CONTROL);
+    }
+}
+async function validatePowerOn(ctx, fileName) {
+    await ensurePowerOnControl(ctx);
+    ctx.sendMessage(ws_constants_1.SymitarNavigation.POWERON_MENU.VALIDATE, false);
+    await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.FILENAME_PROMPT);
+    ctx.sendMessage(`${fileName}\r`, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes('SpecfileErr'));
+    if (ws_constants_1.SymitarPatterns.SPECFILE_NO_ERROR.test(response)) {
+        ctx.logger.info(`${ctx.logPrefix} Validation passed: ${fileName}`);
+        return { isValid: true, errors: '' };
+    }
+    const errorMatch = response.match(ws_constants_1.SymitarPatterns.SPECFILE_ERROR);
+    if (errorMatch) {
+        const line = parseInt(errorMatch[1], 10);
+        const message = errorMatch[2];
+        const errors = `Line ${line}: ${message}`;
+        ctx.logger.warn(`${ctx.logPrefix} Validation failed: ${fileName} - ${errors}`);
+        return { isValid: false, errors };
+    }
+    return { isValid: false, errors: 'Unknown validation error' };
+}
+async function validatePowerOnOffline(ctx, content, originalFileName) {
+    const tempFileName = (0, helpers_1.generateRandomPowerOnName)();
+    const displayName = originalFileName || tempFileName;
+    ctx.logger.info(`${ctx.logPrefix} Validating PowerOn offline: ${displayName} (temp: ${tempFileName})`);
+    try {
+        await Files.storeFile(ctx, tempFileName, content);
+        const result = await validatePowerOn(ctx, tempFileName);
+        if (!result.isValid && result.errors && originalFileName) {
+            result.errors = (0, helpers_1.replaceValidationFileName)(result.errors, tempFileName, originalFileName);
+        }
+        return result;
+    }
+    finally {
+        try {
+            await Files.deleteFile(ctx, tempFileName);
+            ctx.logger.debug(`${ctx.logPrefix} Cleaned up temp file: ${tempFileName}`);
+        }
+        catch (cleanupError) {
+            ctx.logger.warn(`${ctx.logPrefix} Failed to clean up temp file ${tempFileName}: ${cleanupError}`);
+        }
+    }
+}
+async function installPowerOn(ctx, fileName) {
+    await ensurePowerOnControl(ctx);
+    ctx.sendMessage(ws_constants_1.SymitarNavigation.POWERON_MENU.INSTALL, false);
+    await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.FILENAME_PROMPT);
+    ctx.sendMessage(`${fileName}\r`, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes('SpecfileData') || msg.includes('SpecfileErr'));
+    if (response.includes('Action=ErrText') ||
+        response.includes('cannot be installed')) {
+        const lineMatch = response.match(/Action=FileInfo~Page=\d+~Line=(\d+)/);
+        const errMatch = response.match(/Action=ErrText~Line=([^~\x1b]+)/);
+        const line = lineMatch ? parseInt(lineMatch[1], 10) : 0;
+        const message = errMatch ? errMatch[1].trim() : 'Validation error';
+        const errors = `Line ${line}: ${message}`;
+        ctx.logger.error(`${ctx.logPrefix} Install failed: ${fileName} - ${errors}`);
+        return { isValid: false, errors };
+    }
+    if (ws_constants_1.SymitarPatterns.SPECFILE_ERROR.test(response)) {
+        const errorMatch = response.match(ws_constants_1.SymitarPatterns.SPECFILE_ERROR);
+        const errors = errorMatch
+            ? `Line ${errorMatch[1]}: ${errorMatch[2]}`
+            : 'Unknown error';
+        ctx.logger.error(`${ctx.logPrefix} Install failed: ${fileName} - ${errors}`);
+        return { isValid: false, errors };
+    }
+    const sizeMatch = response.match(ws_constants_1.SymitarPatterns.SPECFILE_DATA);
+    const compiledSize = sizeMatch ? parseInt(sizeMatch[2], 10) : undefined;
+    ctx.sendMessage('1\r', false);
+    const finalResponse = await ctx.waitForMessage((msg) => msg.includes('SpecfileErr'));
+    if (ws_constants_1.SymitarPatterns.SPECFILE_NO_ERROR.test(finalResponse)) {
+        ctx.logger.info(`${ctx.logPrefix} Installed PowerOn: ${fileName} (${compiledSize} bytes)`);
+        return { isValid: true, errors: '' };
+    }
+    return { isValid: false, errors: 'Installation failed' };
+}
+async function uninstallPowerOn(ctx, fileName) {
+    await ensurePowerOnControl(ctx);
+    ctx.sendMessage(ws_constants_1.SymitarNavigation.POWERON_MENU.UNINSTALL, false);
+    await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.FILENAME_PROMPT);
+    ctx.sendMessage(`${fileName}\r`, false);
+    const response = await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.CONFIRMATION_PROMPT ||
+        msg.includes('MsgDlg~Type=Warning') ||
+        msg.includes('No such file'));
+    if (response.includes('MsgDlg~Type=Warning') ||
+        response.includes('No such file')) {
+        ctx.logger.info(`${ctx.logPrefix} PowerOn not installed (already uninstalled): ${fileName}`);
+        if (response.includes('HostPaused')) {
+            ctx.sendMessage('\r', false);
+            await ctx
+                .waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.POWERON_MENU, 5000)
+                .catch(() => {
+                ctx.logger.debug(`${ctx.logPrefix} Timeout waiting for menu after warning dismissal`);
+            });
+        }
+        return;
+    }
+    ctx.sendMessage('1\r', false);
+    const result = await ctx.waitForMessage((msg) => msg.includes('DeleteResult') || msg.includes('SpecfileErr'));
+    const success = ws_constants_1.SymitarPatterns.DELETE_RESULT.test(result) && result.includes('Success=1');
+    if (success) {
+        ctx.logger.info(`${ctx.logPrefix} Uninstalled PowerOn: ${fileName}`);
+        return;
+    }
+    ctx.logger.error(`${ctx.logPrefix} Failed to uninstall PowerOn: ${fileName}`);
+    throw new Error(`Failed to uninstall PowerOn: ${fileName}`);
+}
+async function ensureBatchControl(ctx) {
+    if (ctx.getCurrentWorkArea() !== ws_types_1.SymitarWSWorkArea.BATCH_CONTROL) {
+        await ctx.navigateToWorkArea(ws_types_1.SymitarWSWorkArea.BATCH_CONTROL);
+    }
+}
+function parseExecutionValidationError(response) {
+    const fileInfoMatch = response.match(/SpecfileErr~Action=FileInfo~Page=\d+~Line=(\d+)~Col=(\d+)/);
+    const errTextMatch = response.match(/SpecfileErr~Action=ErrText~Line=([^~\x1b\ufffd]+)/);
+    if (fileInfoMatch && errTextMatch) {
+        const line = fileInfoMatch[1];
+        const message = errTextMatch[1].trim();
+        return `Line ${line}: ${message}`;
+    }
+    if (errTextMatch) {
+        return errTextMatch[1].trim();
+    }
+    return 'Validation error';
+}
+function parsePromptInfo(message) {
+    const match = message.match(ws_constants_1.SymitarPatterns.INPUT_PROMPT_FULL);
+    if (!match)
+        return null;
+    return {
+        helpCode: parseInt(match[1], 10),
+        prompt: match[2],
+        dataType: parseInt(match[3], 10),
+        defaultValue: match[5],
+    };
+}
+async function executePowerOn(ctx, fileName, options = {}) {
+    const queue = options.queue ?? options.batchQueue ?? 0;
+    const { waitForCompletion = false, completionTimeout = 300000, pollInterval = 2000, promptHandler, inputs = [], timeout: promptTimeout = 30000, } = options;
+    ctx.logger.info(`${ctx.logPrefix} Executing PowerOn: ${fileName} in queue ${queue}`);
+    await ensureBatchControl(ctx);
+    ctx.sendMessage(ws_constants_1.SymitarNavigation.BATCH_MENU.QUEUE_ACTION, false);
+    await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.BATCH_QUEUE_ACTION);
+    ctx.sendMessage(ws_constants_1.SymitarNavigation.BATCH_MENU.EXECUTE_POWERON, false);
+    await ctx.waitForMessage((msg) => ws_constants_1.SymitarPatterns.BATCH_QUEUEING_START.test(msg) ||
+        (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.BATCH_SPECFILE_PROMPT);
+    ctx.sendMessage(`${fileName}\r`, false);
+    let response = await ctx.waitForMessage((msg) => msg.includes('SpecfileErr') ||
+        msg.includes('No such file or directory') ||
+        msg.includes('Input~HelpCode='));
+    if (response.includes('No such file or directory')) {
+        ctx.logger.error(`${ctx.logPrefix} Execute failed: ${fileName} - File not found`);
+        ctx.sendMessage('\x1b', false);
+        await ctx
+            .waitForMessage((msg) => ws_constants_1.SymitarPatterns.BATCH_QUEUEING_DONE.test(msg) ||
+            (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.BATCH_CONTROL_MENU, 5000)
+            .catch(() => { });
+        return { success: false, error: 'File not found' };
+    }
+    if (response.includes('SpecfileErr~Action=Init') ||
+        response.includes('SpecfileErr~Action=FileInfo') ||
+        response.includes('SpecfileErr~Action=ErrText')) {
+        const error = parseExecutionValidationError(response);
+        ctx.logger.error(`${ctx.logPrefix} Execute failed: ${fileName} - ${error}`);
+        return { success: false, error };
+    }
+    let inputIndex = 0;
+    let helpCode = (0, ws_constants_1.extractHelpCode)(response);
+    while (helpCode && (0, ws_constants_1.isInteractivePromptHelpCode)(helpCode)) {
+        const promptInfo = parsePromptInfo(response);
+        const promptText = promptInfo?.prompt || 'Unknown prompt';
+        ctx.logger.debug(`${ctx.logPrefix} Interactive prompt: ${promptText} (HelpCode=${helpCode})`);
+        let userResponse;
+        if (promptHandler) {
+            const prompt = {
+                text: promptText,
+                context: [response],
+                transactionId: ctx.getNextMsgId(),
+            };
+            try {
+                userResponse = await Promise.race([
+                    promptHandler(prompt),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Prompt handler timeout')), promptTimeout)),
+                ]);
+            }
+            catch (err) {
+                ctx.logger.error(`${ctx.logPrefix} Prompt handler error: ${err}`);
+                ctx.sendMessage('\x1b', false);
+                await ctx
+                    .waitForMessage((msg) => ws_constants_1.SymitarPatterns.BATCH_QUEUEING_DONE.test(msg) ||
+                    (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.BATCH_CONTROL_MENU, 5000)
+                    .catch(() => { });
+                return { success: false, error: `Prompt handler error: ${err}` };
+            }
+            if (userResponse === undefined) {
+                ctx.logger.info(`${ctx.logPrefix} Execution cancelled by prompt handler`);
+                ctx.sendMessage('\x1b', false);
+                await ctx
+                    .waitForMessage((msg) => ws_constants_1.SymitarPatterns.BATCH_QUEUEING_DONE.test(msg) ||
+                    (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.BATCH_CONTROL_MENU, 5000)
+                    .catch(() => { });
+                return { success: false, error: 'Cancelled by user' };
+            }
+        }
+        else if (inputIndex < inputs.length) {
+            userResponse = inputs[inputIndex];
+            inputIndex++;
+        }
+        else {
+            userResponse = promptInfo?.defaultValue || '';
+            ctx.logger.warn(`${ctx.logPrefix} No input available for prompt, using default: "${userResponse}"`);
+        }
+        ctx.logger.debug(`${ctx.logPrefix} Sending prompt response: ${userResponse}`);
+        ctx.sendMessage(`${userResponse}\r`, false);
+        response = await ctx.waitForMessage((msg) => msg.includes('Input~HelpCode='), promptTimeout);
+        helpCode = (0, ws_constants_1.extractHelpCode)(response);
+    }
+    if (helpCode !== ws_constants_1.SymitarHelpCodes.BATCH_SPECFILE_PROMPT) {
+        ctx.logger.warn(`${ctx.logPrefix} Unexpected HelpCode after prompts: ${helpCode}`);
+    }
+    ctx.sendMessage('\r', false);
+    await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.BATCH_OPTIONS);
+    ctx.sendMessage('0\r', false);
+    await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.BATCH_QUEUE_SELECTION);
+    ctx.sendMessage(`${queue}\r`, false);
+    await ctx.waitForMessage((msg) => (0, ws_constants_1.extractHelpCode)(msg) === ws_constants_1.SymitarHelpCodes.CONFIRMATION_PROMPT);
+    ctx.sendMessage('1\r', false);
+    await ctx.waitForMessage((msg) => ws_constants_1.SymitarPatterns.BATCH_QUEUEING_DONE.test(msg));
+    ctx.logger.info(`${ctx.logPrefix} PowerOn queued: ${fileName} in queue ${queue}`);
+    const result = {
+        success: true,
+        queue,
+    };
+    if (waitForCompletion) {
+        result.completed = await waitForJobCompletion(ctx, queue, fileName, completionTimeout, pollInterval);
+    }
+    return result;
+}
+async function waitForJobCompletion(ctx, queue, _fileName, timeout, pollInterval) {
+    const startTime = Date.now();
+    const jobName = 'REPWRITER';
+    ctx.logger.debug(`${ctx.logPrefix} Waiting for job completion in queue ${queue}...`);
+    while (Date.now() - startTime < timeout) {
+        const msgId = ctx.getNextMsgId();
+        const request = (0, ws_constants_1.buildSymitarRequest)('Misc', {
+            InfoType: 'BatchQueues',
+        }, msgId);
+        ctx.sendMessage(request, false);
+        const response = await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'), 10000);
+        const queueEmptyPattern = new RegExp(`Action=QueueEmpty~Queue=${queue}`);
+        const queueEntryPattern = new RegExp(`Queue=${queue}.*Job=${jobName}`);
+        if (queueEmptyPattern.test(response)) {
+            ctx.logger.info(`${ctx.logPrefix} Job completed in queue ${queue}`);
+            return true;
+        }
+        if (!queueEntryPattern.test(response)) {
+            ctx.logger.info(`${ctx.logPrefix} Job no longer in queue ${queue}`);
+            return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+    ctx.logger.warn(`${ctx.logPrefix} Timeout waiting for job completion in queue ${queue}`);
+    return false;
+}
+//# sourceMappingURL=ws.poweron.js.map
+
+/***/ }),
+
+/***/ 5495:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.listReports = listReports;
+exports.getReportBySequence = getReportBySequence;
+exports.retrieveReport = retrieveReport;
+exports.parseBatchOutput = parseBatchOutput;
+exports.findReportSequences = findReportSequences;
+exports.findReportsByBatchSeq = findReportsByBatchSeq;
+const ws_constants_1 = __nccwpck_require__(57253);
+const ws_types_1 = __nccwpck_require__(52565);
+async function ensurePrintControl(ctx) {
+    if (ctx.getCurrentWorkArea() !== ws_types_1.SymitarWSWorkArea.PRINT_CONTROL) {
+        await ctx.navigateToWorkArea(ws_types_1.SymitarWSWorkArea.PRINT_CONTROL);
+    }
+}
+async function listReports(ctx, count = 20, titleFilter) {
+    await ensurePrintControl(ctx);
+    const msgId = ctx.getNextMsgId();
+    let query = `LAST ${count}`;
+    if (titleFilter) {
+        query += ` "+${titleFilter.toUpperCase()}+"`;
+    }
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Action: 'List',
+        Type: 'Report',
+        Query: query,
+        MaxCount: '50',
+    }, msgId);
+    ctx.sendMessage(request, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'));
+    const reports = [];
+    const pattern = /File~MsgId=[^~]+~Sequence=(\d+)~Title=([^~]*)~Forms=[^~]*~Size=(\d+)~PageCount=(\d+)~BatchSeq=(\d+)~Date=(\d+)~Time=(\d+)~PrintCount=(\d+)~TapeCount=(\d+)~Category=([^~\u00fc\ufffd]*)/g;
+    let match;
+    while ((match = pattern.exec(response)) !== null) {
+        reports.push({
+            sequence: match[1],
+            title: match[2],
+            size: parseInt(match[3], 10),
+            pageCount: parseInt(match[4], 10),
+            batchSeq: parseInt(match[5], 10),
+            date: match[6],
+            time: match[7],
+            printCount: parseInt(match[8], 10),
+            tapeCount: parseInt(match[9], 10),
+            category: match[10],
+        });
+    }
+    ctx.logger.info(`${ctx.logPrefix} Listed ${reports.length} reports`);
+    return reports;
+}
+async function getReportBySequence(ctx, sequence) {
+    await ensurePrintControl(ctx);
+    const msgId = ctx.getNextMsgId();
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Action: 'List',
+        Type: 'Report',
+        Query: sequence,
+        MaxCount: '1',
+    }, msgId);
+    ctx.sendMessage(request, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) && msg.includes('Done'));
+    const pattern = /File~MsgId=[^~]+~Sequence=(\d+)~Title=([^~]*)~Forms=[^~]*~Size=(\d+)~PageCount=(\d+)~BatchSeq=(\d+)~Date=(\d+)~Time=(\d+)~PrintCount=(\d+)~TapeCount=(\d+)~Category=([^~\u00fc\ufffd]*)/;
+    const match = response.match(pattern);
+    if (!match) {
+        return null;
+    }
+    return {
+        sequence: match[1],
+        title: match[2],
+        size: parseInt(match[3], 10),
+        pageCount: parseInt(match[4], 10),
+        batchSeq: parseInt(match[5], 10),
+        date: match[6],
+        time: match[7],
+        printCount: parseInt(match[8], 10),
+        tapeCount: parseInt(match[9], 10),
+        category: match[10],
+    };
+}
+async function retrieveReport(ctx, sequence) {
+    await ensurePrintControl(ctx);
+    const msgId = ctx.getNextMsgId();
+    const request = (0, ws_constants_1.buildSymitarRequest)('File', {
+        Action: 'Retrieve',
+        Type: 'Report',
+        Name: sequence,
+    }, msgId);
+    ctx.sendMessage(request, false);
+    const response = await ctx.waitForMessage((msg) => msg.includes(`MsgId=${msgId}`) &&
+        (msg.includes('Filesize=') ||
+            msg.includes('Error') ||
+            msg.includes('Status=')));
+    if (response.includes('Error') || response.includes('Status=Unable')) {
+        ctx.logger.warn(`${ctx.logPrefix} Report not found: ${sequence}`);
+        return null;
+    }
+    const lines = [];
+    const linePattern = /File~MsgId=\d+(?:~NewPage=\d+)?\ufffd([^\ufffd]+)\ufffd/g;
+    let lineMatch;
+    while ((lineMatch = linePattern.exec(response)) !== null) {
+        const content = lineMatch[1].trim();
+        if (content &&
+            !content.startsWith('File~') &&
+            !content.includes('Filesize=')) {
+            lines.push(content);
+        }
+    }
+    if (lines.length === 0) {
+        const altPattern = /File~MsgId=\d+(?:~NewPage=\d+)?\u00fd([^\u00fe]+)\u00fe/g;
+        while ((lineMatch = altPattern.exec(response)) !== null) {
+            const content = lineMatch[1].trim();
+            if (content &&
+                !content.startsWith('File~') &&
+                !content.includes('Filesize=')) {
+                lines.push(content);
+            }
+        }
+    }
+    if (lines.length === 0) {
+        ctx.logger.warn(`${ctx.logPrefix} Could not parse report content for: ${sequence}`);
+        return null;
+    }
+    const content = lines.join('\n');
+    ctx.logger.debug(`${ctx.logPrefix} Retrieved report ${sequence}: ${lines.length} lines`);
+    return content;
+}
+function parseBatchOutput(content) {
+    const info = {
+        directory: '',
+        queue: 0,
+        priority: 0,
+        user: 0,
+        program: '',
+        batchSeq: 0,
+        powerOnNames: [],
+        outputSequences: [],
+        returnCode: -1,
+        completionDateTime: '',
+    };
+    const dirMatch = content.match(/%DIRECTORY\s+(\S+)\s+%QUEUE\s+(\d+)\s+%PRIORITY\s+(\d+)\s+%USER\s+(\d+)/);
+    if (dirMatch) {
+        info.directory = dirMatch[1];
+        info.queue = parseInt(dirMatch[2], 10);
+        info.priority = parseInt(dirMatch[3], 10);
+        info.user = parseInt(dirMatch[4], 10);
+    }
+    const progMatch = content.match(/%PROGRAM\s+(\S+)/);
+    if (progMatch) {
+        info.program = progMatch[1];
+    }
+    const batchSeqMatch = content.match(/Batch Sequence:\s*(\d+)/);
+    if (batchSeqMatch) {
+        info.batchSeq = parseInt(batchSeqMatch[1], 10);
+    }
+    const specFilePattern = /Specification File[^:]*:\s*(\S+\.PO)/gi;
+    let specMatch;
+    while ((specMatch = specFilePattern.exec(content)) !== null) {
+        if (specMatch[1] && !info.powerOnNames.includes(specMatch[1])) {
+            info.powerOnNames.push(specMatch[1]);
+        }
+    }
+    const seqPattern = /Seq:\s*(\d+)/g;
+    let seqMatch;
+    while ((seqMatch = seqPattern.exec(content)) !== null) {
+        if (!info.outputSequences.includes(seqMatch[1])) {
+            info.outputSequences.push(seqMatch[1]);
+        }
+    }
+    const returnMatch = content.match(/%BATCHRETURNCODE:\s*(\d+)/);
+    if (returnMatch) {
+        info.returnCode = parseInt(returnMatch[1], 10);
+    }
+    const completionMatch = content.match(/%COMPLETIONDATETIME\s+(\S+\s+\S+)/);
+    if (completionMatch) {
+        info.completionDateTime = completionMatch[1];
+    }
+    if (!info.directory || info.batchSeq === 0) {
+        return null;
+    }
+    return info;
+}
+async function findReportSequences(ctx, powerOnName, options = {}) {
+    const { batchSeq, maxResults = 20, batchOutputOnly = true } = options;
+    const reports = await listReports(ctx, maxResults, batchOutputOnly ? 'Batch Output for REPWRITER' : undefined);
+    const candidateReports = batchSeq
+        ? reports.filter((r) => r.batchSeq === batchSeq)
+        : reports;
+    if (candidateReports.length === 0) {
+        ctx.logger.debug(`${ctx.logPrefix} No matching batch output reports found`);
+        return [];
+    }
+    for (const report of candidateReports) {
+        const content = await retrieveReport(ctx, report.sequence);
+        if (!content)
+            continue;
+        const batchInfo = parseBatchOutput(content);
+        if (!batchInfo)
+            continue;
+        const upperPowerOnName = powerOnName.toUpperCase();
+        const foundPowerOn = batchInfo.powerOnNames.some((name) => name.toUpperCase() === upperPowerOnName ||
+            name.toUpperCase().includes(upperPowerOnName));
+        if (foundPowerOn) {
+            ctx.logger.info(`${ctx.logPrefix} Found sequences for ${powerOnName}: ${batchInfo.outputSequences.join(', ')}`);
+            return batchInfo.outputSequences;
+        }
+    }
+    ctx.logger.debug(`${ctx.logPrefix} PowerOn ${powerOnName} not found in recent batch outputs`);
+    return [];
+}
+async function findReportsByBatchSeq(ctx, batchSeq, maxResults = 50) {
+    const reports = await listReports(ctx, maxResults);
+    return reports.filter((r) => r.batchSeq === batchSeq);
+}
+//# sourceMappingURL=ws.reports.js.map
+
+/***/ }),
+
+/***/ 15638:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getChangedFiles = getChangedFiles;
+exports.syncFiles = syncFiles;
+const path_1 = __importDefault(__nccwpck_require__(16928));
+const types_1 = __nccwpck_require__(19233);
+const helpers_1 = __nccwpck_require__(56177);
+const sftp_sync_1 = __nccwpck_require__(7371);
+const sync_orchestrator_1 = __nccwpck_require__(75110);
+const PowerOn = __importStar(__nccwpck_require__(40012));
+async function getChangedFiles(sshConfig, symitarConfig, localDirectory, remoteDirectory, logger, syncMode = types_1.SymitarSyncMode.MIRROR, options = {}) {
+    const logPrefix = '[WS:GetChangedFiles]';
+    const transport = options.transport || types_1.SymitarSyncTransport.RSYNC;
+    try {
+        logger.debug(`${logPrefix} Checking for changed files in ${remoteDirectory} (mode: ${syncMode}, transport: ${transport})`);
+        if (transport === types_1.SymitarSyncTransport.SFTP) {
+            const sftpService = new sftp_sync_1.SFTPSyncService();
+            try {
+                return await sftpService.getChangedFiles({
+                    host: sshConfig.host,
+                    port: sshConfig.port || 22,
+                    username: sshConfig.username,
+                    password: sshConfig.password,
+                    symNumber: symitarConfig.symNumber,
+                    localDirectory,
+                    remoteDirectory,
+                    syncMode,
+                    concurrency: options.concurrency,
+                    onProgress: options.onProgress,
+                    compareMode: options.compareMode,
+                }, logger);
+            }
+            finally {
+                await sftpService.disconnect();
+            }
+        }
+        const changedFiles = await (0, helpers_1.executeRsync)({
+            host: sshConfig.host,
+            username: sshConfig.username,
+            password: sshConfig.password,
+            symNumber: symitarConfig.symNumber,
+            localDirectory,
+            remoteDirectory,
+            syncMode,
+            compareMode: options.compareMode,
+        }, true);
+        return changedFiles;
+    }
+    catch (error) {
+        logger.error(`${logPrefix} Unable to get changed files: ${error.message}`);
+        throw error;
+    }
+}
+async function executeSyncTransport(sshConfig, symitarConfig, localDirectory, remoteDirectory, syncMode, isDryRun, options, logger, deployed, deleted) {
+    const transport = options.transport || types_1.SymitarSyncTransport.RSYNC;
+    if (isDryRun) {
+        return {
+            synced: deployed,
+            deleted,
+            skipped: [],
+            outliers: [],
+            errors: [],
+        };
+    }
+    if (transport === types_1.SymitarSyncTransport.SFTP) {
+        const sftpService = new sftp_sync_1.SFTPSyncService();
+        try {
+            return await sftpService.sync({
+                host: sshConfig.host,
+                port: sshConfig.port || 22,
+                username: sshConfig.username,
+                password: sshConfig.password,
+                symNumber: symitarConfig.symNumber,
+                localDirectory,
+                remoteDirectory,
+                syncMode,
+                concurrency: options.concurrency,
+                onProgress: options.onProgress,
+                compareMode: options.compareMode,
+            }, isDryRun, logger);
+        }
+        finally {
+            await sftpService.disconnect();
+        }
+    }
+    await (0, helpers_1.executeRsync)({
+        host: sshConfig.host,
+        username: sshConfig.username,
+        password: sshConfig.password,
+        symNumber: symitarConfig.symNumber,
+        localDirectory,
+        remoteDirectory,
+        syncMode,
+        compareMode: options.compareMode,
+    }, isDryRun);
+    return {
+        synced: deployed,
+        deleted,
+        skipped: [],
+        outliers: [],
+        errors: [],
+    };
+}
+async function syncFiles(sshConfig, symitarConfig, wsContext, localDirectory, remoteDirectory, syncMode, isDryRun, logger, options = {}) {
+    const logPrefix = '[WS:SyncFiles]';
+    const transport = options.transport || types_1.SymitarSyncTransport.RSYNC;
+    logger.debug(`${logPrefix} Starting ${syncMode} sync of ${remoteDirectory} using ${transport} transport${isDryRun ? ' (dry run)' : ''}`);
+    const operations = {
+        getChangedFiles: () => getChangedFiles(sshConfig, symitarConfig, localDirectory, remoteDirectory, logger, syncMode, options),
+        validatePowerOn: async (filePath) => {
+            const fs = await Promise.resolve().then(() => __importStar(__nccwpck_require__(79896)));
+            const content = fs.readFileSync(filePath, 'utf8');
+            const fileName = path_1.default.basename(filePath);
+            const result = await PowerOn.validatePowerOnOffline(wsContext, content, fileName);
+            return { isValid: result.isValid, errors: result.errors };
+        },
+        executeSync: (deployed, deleted) => executeSyncTransport(sshConfig, symitarConfig, localDirectory, remoteDirectory, syncMode, isDryRun, options, logger, deployed, deleted),
+        installPowerOn: async (filePath) => {
+            const fileName = path_1.default.basename(filePath);
+            logger.debug(`${logPrefix} Installing PowerOn via WS: ${fileName}`);
+            const result = await PowerOn.installPowerOn(wsContext, fileName);
+            if (!result.isValid) {
+                throw new Error(`Failed to install ${fileName}: ${result.errors}`);
+            }
+        },
+        uninstallPowerOn: async (fileName) => {
+            logger.debug(`${logPrefix} Uninstalling PowerOn via WS: ${fileName}`);
+            await PowerOn.uninstallPowerOn(wsContext, fileName);
+        },
+    };
+    const config = {
+        localDirectory,
+        remoteDirectory,
+        syncMode,
+        isDryRun,
+        logger,
+        logPrefix,
+        options,
+    };
+    return (0, sync_orchestrator_1.orchestrateSync)(config, operations);
+}
+//# sourceMappingURL=ws.synchronize.js.map
+
+/***/ }),
+
+/***/ 52565:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.WSProtocolFileType = exports.SymitarWSWorkArea = exports.SymitarWSState = exports.SymitarWSPatterns = void 0;
+exports.toWSProtocolFileType = toWSProtocolFileType;
+const constants_1 = __nccwpck_require__(90857);
+const types_1 = __nccwpck_require__(19233);
 exports.SymitarWSPatterns = {
     SYM_LOGIN_PROMPT: /login as:/,
     SYM_PASSWORD_PROMPT: /'s Password:/,
@@ -6800,146 +9330,41 @@ var SymitarWSWorkArea;
     SymitarWSWorkArea["SIGNONMESSAGE"] = "";
     SymitarWSWorkArea["ACCOUNT_MANAGER"] = "m1\u001B";
     SymitarWSWorkArea["POWERON_CONTROL"] = "mm3\u001B";
+    SymitarWSWorkArea["LETTERFILE_CONTROL"] = "mm4\u001B";
+    SymitarWSWorkArea["HELPFILE_CONTROL"] = "mm5\u001B";
     SymitarWSWorkArea["PRINT_CONTROL"] = "MM1\u001B";
+    SymitarWSWorkArea["BATCH_CONTROL"] = "MM0\u001B";
 })(SymitarWSWorkArea || (exports.SymitarWSWorkArea = SymitarWSWorkArea = {}));
-class SymitarWS {
-    _ws;
-    _sessionInfo = {};
-    _msgId = 1000000;
-    _loginState;
-    _logPrefix = '[SymitarWS]';
-    _logger;
-    _loginHost = 'anonymousvm';
-    _loginHostIP = os_1.default.networkInterfaces().en0?.[0].address || '';
-    _error$ = new rxjs_1.BehaviorSubject(null);
-    _state$ = new rxjs_1.BehaviorSubject(SymitarWSState.LOGIN_PROMPT);
-    _workArea$ = new rxjs_1.BehaviorSubject(null);
-    get _nextMsgId() {
-        return (this._msgId++).toString();
-    }
-    get _currentState() {
-        return this._state$.value;
-    }
-    get _currentError() {
-        return this._error$.value;
-    }
-    _host;
-    _config;
-    get config() {
-        return this._config;
-    }
-    get loginHost() {
-        return this._loginHost;
-    }
-    get state$() {
-        return this._state$.asObservable();
-    }
-    get workArea$() {
-        return this._workArea$.asObservable();
-    }
-    constructor(baseUrl, config, logLevel = 'info', customLogger) {
-        this._config = config;
-        this._host = new URL(baseUrl).hostname;
-        this._loginState = (0, states_1.createInitialLoginState)();
-        this._logger = (0, logging_1.createLogger)(logLevel, customLogger);
-        if (!this._config.aixUsername || !this._config.aixPassword) {
-            this._logger.error(`${this._logPrefix} AIX username and password are required`);
-            throw new Error('AIX username and password are required');
-        }
-        this._ws = new ws_1.default(`${baseUrl}/quest`, {
-            headers: {
-                CONNECTIONTYPE: '5',
-                DOMAIN: '',
-                INSTITUTIONID: 'SYMITAR',
-                ISEXPERIENCE: 'False',
-                ISHOSTDOWNLOAD: 'False',
-                ISVIRTUAL: 'False',
-                PORT: '-1',
-                PROFILE: 'TEST',
-                SERVER: this._host,
-                SYMNUMBER: (0, helpers_1.paddedSymNumber)(this._config.symNumber),
-                LOGINHOST: this._loginHost,
-                LOGINHOSTIP: this._loginHostIP,
-            },
-            rejectUnauthorized: false,
-        });
-        this._ws.on('open', () => {
-            this._logger.info(`${this._logPrefix} Connected to Symitar at ${baseUrl}/quest`);
-        });
-        this._ws.on('message', (data) => {
-            const message = data.toString();
-            this._logger.debug(`${this._logPrefix} < ${(0, logging_1.sanitizeForLogging)(message)}`);
-            if (this._currentState <= SymitarWSState.NEEDS_SESSION_INFO) {
-                this._handleLoginPrompts(message);
-            }
-        });
-        this._ws.on('error', (error) => {
-            this._logger.error(`${this._logPrefix} WebSocket error: ${error.message}`);
-        });
-    }
-    _handleLoginPrompts(data) {
-        if (typeof data !== 'string')
-            return;
-        if (!this._loginState)
-            return;
-        this._loginState.handle(this, data, this._logger);
-    }
-    setState(state) {
-        this._loginState = state;
-    }
-    setWSState(state) {
-        this._state$.next(state);
-    }
-    setWorkArea(workArea) {
-        this._workArea$.next(workArea);
-    }
-    setSessionInfo(key, value) {
-        this._sessionInfo[key] = value;
-    }
-    sendMessage(message, includeCR = true, includeNewline = false) {
-        this._logger.debug(`${this._logPrefix} > ${(0, logging_1.sanitizeForLogging)(message)}`);
-        const buffer = Buffer.from(message + `${includeCR ? '\r' : ''}${includeNewline ? '\n' : ''}`, 'ascii');
-        this._ws.send(buffer);
-    }
-    _waitForMessage(match, timeoutMS = 5000) {
-        return new Promise((res, rej) => {
-            const timeout = setTimeout(() => {
-                this._ws.off('message', handler);
-                rej(new Error(''));
-            }, timeoutMS);
-            const handler = (data) => {
-                const message = data.toString();
-                if (match(message)) {
-                    clearTimeout(timeout);
-                    this._ws.off('message', handler);
-                    res(message);
-                }
-            };
-            this._ws.on('message', handler);
-        });
-    }
-    async isReady(timeoutInMS = 10000) {
-        this._logger.debug(`${this._logPrefix} Waiting for Symitar to be ready...`);
-        await (0, rxjs_1.firstValueFrom)(this.state$.pipe((0, rxjs_1.startWith)(this._state$.value), (0, rxjs_1.tap)((state) => {
-            if (state === SymitarWSState.SYMITAR_ERROR) {
-                this._logger.error(`${this._logPrefix} Symitar is in an error state`);
-                throw new Error(this._currentError || 'An unknown Symitar error occurred');
-            }
-        }), (0, rxjs_1.filter)((state) => state === SymitarWSState.SYMITAR_READY), (0, rxjs_1.timeout)(timeoutInMS)));
-        this._logger.debug(`${this._logPrefix} Symitar is ready`);
-    }
-    end() {
-        const buffer = Buffer.from(`l${constants_1.ESC}`, 'ascii');
-        this._ws.send(buffer);
-        this._ws.close();
+exports.WSProtocolFileType = {
+    REP_WRITER: 'RepWriter',
+    REP_WRITER_CODE: 'RepWriterCode',
+    LETTER: 'Letter',
+    HELP: 'Help',
+    DATA: 'Data',
+    PFRAME: 'PFRAME',
+    PC_SOFTWARE: 'PCSoftware',
+};
+function toWSProtocolFileType(fileType) {
+    switch (fileType) {
+        case types_1.SymitarFileType.POWERON:
+            return exports.WSProtocolFileType.REP_WRITER;
+        case types_1.SymitarFileType.POWERON_INSTALLED:
+            return exports.WSProtocolFileType.REP_WRITER_CODE;
+        case types_1.SymitarFileType.LETTERFILE:
+            return exports.WSProtocolFileType.LETTER;
+        case types_1.SymitarFileType.HELPFILE:
+            return exports.WSProtocolFileType.HELP;
+        case types_1.SymitarFileType.DATAFILE:
+            return exports.WSProtocolFileType.DATA;
+        default:
+            throw new Error(`Unsupported file type: ${fileType}`);
     }
 }
-exports.SymitarWS = SymitarWS;
-//# sourceMappingURL=ws.js.map
+//# sourceMappingURL=ws.types.js.map
 
 /***/ }),
 
-/***/ 56541:
+/***/ 9568:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -6959,11 +9384,11 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.BaseSymitarClient = exports.ERROR_MESSAGES = exports.SymitarTimeoutError = exports.SymitarCLIError = exports.SymitarFileOperationError = exports.SymitarValidationError = exports.SymitarDependencyError = exports.SymitarConfigurationError = exports.SymitarConnectionError = exports.SymitarErrorCode = exports.SymitarError = exports.disconnectSFTPSyncService = exports.getSFTPSyncService = exports.executeSFTPSync = exports.SFTPSyncService = exports.SymitarWorkerType = exports.SymitarSyncTransport = exports.SymitarSyncMode = exports.SymitarSyncDirectory = exports.SymitarDirectory = exports.SymitarAppServerFileType = exports.BatchQueueSelection = exports.getSkipReasonForFile = exports.getSkipReason = exports.shouldValidatePowerOnFile = exports.shouldValidatePowerOn = exports.shouldValidatePowerOnByExtension = exports.isValidPowerOnSpecfile = exports.hasPrintDivision = exports.hasTargetDivision = exports.getFirstWord = exports.removeBlockComments = exports.POWERON_PRINT_TITLE_PATTERN = exports.POWERON_TARGET_PATTERN = exports.EXTENSIONS_TO_SKIP_VALIDATION = exports.POWERON_EXTENSIONS = void 0;
-__exportStar(__nccwpck_require__(65601), exports);
-__exportStar(__nccwpck_require__(42493), exports);
-__exportStar(__nccwpck_require__(23379), exports);
-var poweron_detection_1 = __nccwpck_require__(62593);
+exports.BaseSymitarClient = exports.ERROR_MESSAGES = exports.SymitarTimeoutError = exports.SymitarCLIError = exports.SymitarPermissionError = exports.SymitarFileOperationError = exports.SymitarValidationError = exports.SymitarDependencyError = exports.SymitarConfigurationError = exports.SymitarConnectionError = exports.SymitarErrorCode = exports.SymitarError = exports.disconnectReportsSyncService = exports.getReportsSyncService = exports.ReportsRetentionPeriod = exports.ReportsSyncService = exports.disconnectSFTPSyncService = exports.getSFTPSyncService = exports.executeSFTPSync = exports.SFTPSyncService = exports.createNormalizedDirectoryCopy = exports.getNormalizedFileSize = exports.normalizeStringLineEndings = exports.normalizeBufferLineEndings = exports.isBinaryBuffer = exports.SymitarWorkerType = exports.SymitarSyncTransport = exports.SymitarSyncMode = exports.SymitarSyncDirectory = exports.SymitarDirectory = exports.SymitarAppServerFileType = exports.BatchQueueSelection = exports.getSkipReasonForFile = exports.getSkipReason = exports.shouldValidatePowerOnFile = exports.shouldValidatePowerOn = exports.shouldValidatePowerOnByExtension = exports.isValidPowerOnSpecfile = exports.hasPrintDivision = exports.hasTargetDivision = exports.getFirstWord = exports.removeBlockComments = exports.POWERON_PRINT_TITLE_PATTERN = exports.POWERON_TARGET_PATTERN = exports.EXTENSIONS_TO_SKIP_VALIDATION = exports.POWERON_EXTENSIONS = void 0;
+__exportStar(__nccwpck_require__(2144), exports);
+__exportStar(__nccwpck_require__(8908), exports);
+__exportStar(__nccwpck_require__(94514), exports);
+var poweron_detection_1 = __nccwpck_require__(80974);
 Object.defineProperty(exports, "POWERON_EXTENSIONS", ({ enumerable: true, get: function () { return poweron_detection_1.POWERON_EXTENSIONS; } }));
 Object.defineProperty(exports, "EXTENSIONS_TO_SKIP_VALIDATION", ({ enumerable: true, get: function () { return poweron_detection_1.EXTENSIONS_TO_SKIP_VALIDATION; } }));
 Object.defineProperty(exports, "POWERON_TARGET_PATTERN", ({ enumerable: true, get: function () { return poweron_detection_1.POWERON_TARGET_PATTERN; } }));
@@ -6978,7 +9403,7 @@ Object.defineProperty(exports, "shouldValidatePowerOn", ({ enumerable: true, get
 Object.defineProperty(exports, "shouldValidatePowerOnFile", ({ enumerable: true, get: function () { return poweron_detection_1.shouldValidatePowerOnFile; } }));
 Object.defineProperty(exports, "getSkipReason", ({ enumerable: true, get: function () { return poweron_detection_1.getSkipReason; } }));
 Object.defineProperty(exports, "getSkipReasonForFile", ({ enumerable: true, get: function () { return poweron_detection_1.getSkipReasonForFile; } }));
-var types_1 = __nccwpck_require__(27118);
+var types_1 = __nccwpck_require__(19233);
 Object.defineProperty(exports, "BatchQueueSelection", ({ enumerable: true, get: function () { return types_1.BatchQueueSelection; } }));
 Object.defineProperty(exports, "SymitarAppServerFileType", ({ enumerable: true, get: function () { return types_1.SymitarAppServerFileType; } }));
 Object.defineProperty(exports, "SymitarDirectory", ({ enumerable: true, get: function () { return types_1.SymitarDirectory; } }));
@@ -6986,12 +9411,23 @@ Object.defineProperty(exports, "SymitarSyncDirectory", ({ enumerable: true, get:
 Object.defineProperty(exports, "SymitarSyncMode", ({ enumerable: true, get: function () { return types_1.SymitarSyncMode; } }));
 Object.defineProperty(exports, "SymitarSyncTransport", ({ enumerable: true, get: function () { return types_1.SymitarSyncTransport; } }));
 Object.defineProperty(exports, "SymitarWorkerType", ({ enumerable: true, get: function () { return types_1.SymitarWorkerType; } }));
-var sftp_sync_1 = __nccwpck_require__(56312);
+var line_endings_1 = __nccwpck_require__(74689);
+Object.defineProperty(exports, "isBinaryBuffer", ({ enumerable: true, get: function () { return line_endings_1.isBinaryBuffer; } }));
+Object.defineProperty(exports, "normalizeBufferLineEndings", ({ enumerable: true, get: function () { return line_endings_1.normalizeBufferLineEndings; } }));
+Object.defineProperty(exports, "normalizeStringLineEndings", ({ enumerable: true, get: function () { return line_endings_1.normalizeStringLineEndings; } }));
+Object.defineProperty(exports, "getNormalizedFileSize", ({ enumerable: true, get: function () { return line_endings_1.getNormalizedFileSize; } }));
+Object.defineProperty(exports, "createNormalizedDirectoryCopy", ({ enumerable: true, get: function () { return line_endings_1.createNormalizedDirectoryCopy; } }));
+var sftp_sync_1 = __nccwpck_require__(7371);
 Object.defineProperty(exports, "SFTPSyncService", ({ enumerable: true, get: function () { return sftp_sync_1.SFTPSyncService; } }));
 Object.defineProperty(exports, "executeSFTPSync", ({ enumerable: true, get: function () { return sftp_sync_1.executeSFTPSync; } }));
 Object.defineProperty(exports, "getSFTPSyncService", ({ enumerable: true, get: function () { return sftp_sync_1.getSFTPSyncService; } }));
 Object.defineProperty(exports, "disconnectSFTPSyncService", ({ enumerable: true, get: function () { return sftp_sync_1.disconnectSFTPSyncService; } }));
-var errors_1 = __nccwpck_require__(90416);
+var reports_sync_1 = __nccwpck_require__(11979);
+Object.defineProperty(exports, "ReportsSyncService", ({ enumerable: true, get: function () { return reports_sync_1.ReportsSyncService; } }));
+Object.defineProperty(exports, "ReportsRetentionPeriod", ({ enumerable: true, get: function () { return reports_sync_1.ReportsRetentionPeriod; } }));
+Object.defineProperty(exports, "getReportsSyncService", ({ enumerable: true, get: function () { return reports_sync_1.getReportsSyncService; } }));
+Object.defineProperty(exports, "disconnectReportsSyncService", ({ enumerable: true, get: function () { return reports_sync_1.disconnectReportsSyncService; } }));
+var errors_1 = __nccwpck_require__(68677);
 Object.defineProperty(exports, "SymitarError", ({ enumerable: true, get: function () { return errors_1.SymitarError; } }));
 Object.defineProperty(exports, "SymitarErrorCode", ({ enumerable: true, get: function () { return errors_1.SymitarErrorCode; } }));
 Object.defineProperty(exports, "SymitarConnectionError", ({ enumerable: true, get: function () { return errors_1.SymitarConnectionError; } }));
@@ -6999,23 +9435,24 @@ Object.defineProperty(exports, "SymitarConfigurationError", ({ enumerable: true,
 Object.defineProperty(exports, "SymitarDependencyError", ({ enumerable: true, get: function () { return errors_1.SymitarDependencyError; } }));
 Object.defineProperty(exports, "SymitarValidationError", ({ enumerable: true, get: function () { return errors_1.SymitarValidationError; } }));
 Object.defineProperty(exports, "SymitarFileOperationError", ({ enumerable: true, get: function () { return errors_1.SymitarFileOperationError; } }));
+Object.defineProperty(exports, "SymitarPermissionError", ({ enumerable: true, get: function () { return errors_1.SymitarPermissionError; } }));
 Object.defineProperty(exports, "SymitarCLIError", ({ enumerable: true, get: function () { return errors_1.SymitarCLIError; } }));
 Object.defineProperty(exports, "SymitarTimeoutError", ({ enumerable: true, get: function () { return errors_1.SymitarTimeoutError; } }));
 Object.defineProperty(exports, "ERROR_MESSAGES", ({ enumerable: true, get: function () { return errors_1.ERROR_MESSAGES; } }));
-var interfaces_1 = __nccwpck_require__(72819);
+var interfaces_1 = __nccwpck_require__(78006);
 Object.defineProperty(exports, "BaseSymitarClient", ({ enumerable: true, get: function () { return interfaces_1.BaseSymitarClient; } }));
 //# sourceMappingURL=index.js.map
 
 /***/ }),
 
-/***/ 88922:
+/***/ 90857:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MESSAGE_BLOCK = exports.CLI_VALIDATE_PATTERN = exports.CLI_SSH_WORKER_COMMANDS = exports.CLI_NON_ASCI_PATTERN = exports.CLI_EASE_PATTERN = exports.CLI_CONSOLE_PATTERN = exports.APP_SERVER_VALIDATE_PATTERN = exports.ESC = exports.SSHPASS_PATTERN = void 0;
-const types_1 = __nccwpck_require__(27118);
+const types_1 = __nccwpck_require__(19233);
 exports.SSHPASS_PATTERN = /sshpass -p ".*?"/;
 exports.ESC = '\u001b';
 exports.APP_SERVER_VALIDATE_PATTERN = /(Error in file)(\n|.)*?(Error: Specfile:)/gim;
@@ -7036,13 +9473,13 @@ exports.MESSAGE_BLOCK = /@begin~(.*?)~@end/;
 
 /***/ }),
 
-/***/ 90416:
+/***/ 68677:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ERROR_MESSAGES = exports.SymitarTimeoutError = exports.SymitarCLIError = exports.SymitarFileOperationError = exports.SymitarValidationError = exports.SymitarDependencyError = exports.SymitarConfigurationError = exports.SymitarConnectionError = exports.SymitarError = exports.SymitarErrorCode = void 0;
+exports.ERROR_MESSAGES = exports.SymitarTimeoutError = exports.SymitarCLIError = exports.SymitarPermissionError = exports.SymitarFileOperationError = exports.SymitarValidationError = exports.SymitarDependencyError = exports.SymitarConfigurationError = exports.SymitarConnectionError = exports.SymitarError = exports.SymitarErrorCode = void 0;
 var SymitarErrorCode;
 (function (SymitarErrorCode) {
     SymitarErrorCode["CONNECTION_FAILED"] = "CONNECTION_FAILED";
@@ -7062,9 +9499,11 @@ var SymitarErrorCode;
     SymitarErrorCode["INSTALL_FAILED"] = "INSTALL_FAILED";
     SymitarErrorCode["UNINSTALL_FAILED"] = "UNINSTALL_FAILED";
     SymitarErrorCode["LIST_FAILED"] = "LIST_FAILED";
+    SymitarErrorCode["PERMISSION_DENIED"] = "PERMISSION_DENIED";
     SymitarErrorCode["CLI_NOT_SUPPORTED"] = "CLI_NOT_SUPPORTED";
     SymitarErrorCode["USER_RECORD_IN_USE"] = "USER_RECORD_IN_USE";
     SymitarErrorCode["CONSOLE_LOCKED"] = "CONSOLE_LOCKED";
+    SymitarErrorCode["ALL_SESSIONS_IN_USE"] = "ALL_SESSIONS_IN_USE";
     SymitarErrorCode["LOGIN_NOT_ALLOWED"] = "LOGIN_NOT_ALLOWED";
     SymitarErrorCode["TIMEOUT"] = "TIMEOUT";
     SymitarErrorCode["COMMAND_FAILED"] = "COMMAND_FAILED";
@@ -7170,6 +9609,15 @@ class SymitarFileOperationError extends SymitarError {
     }
 }
 exports.SymitarFileOperationError = SymitarFileOperationError;
+class SymitarPermissionError extends SymitarError {
+    remotePath;
+    constructor(message, remotePath, cause) {
+        super(message, SymitarErrorCode.PERMISSION_DENIED, cause);
+        this.name = 'SymitarPermissionError';
+        this.remotePath = remotePath;
+    }
+}
+exports.SymitarPermissionError = SymitarPermissionError;
 class SymitarCLIError extends SymitarError {
     constructor(message, code) {
         super(message, code);
@@ -7183,6 +9631,9 @@ class SymitarCLIError extends SymitarError {
     }
     static consoleLocked(console) {
         return new SymitarCLIError(`Too many invalid password attempts on console: ${console}. Please unlock through Symitar security console.`, SymitarErrorCode.CONSOLE_LOCKED);
+    }
+    static allSessionsInUse(console) {
+        return new SymitarCLIError(`All sessions for console ${console} are currently in use. Please close an existing session and try again.`, SymitarErrorCode.ALL_SESSIONS_IN_USE);
     }
     static loginNotAllowed(hostname) {
         return new SymitarCLIError(`Logins are not allowed on the Symitar CLI for ${hostname}. Please add this workstation to HOST.CFG on Symitar.`, SymitarErrorCode.LOGIN_NOT_ALLOWED);
@@ -7207,12 +9658,13 @@ exports.ERROR_MESSAGES = {
     TOO_MANY_INVALID_PASSWORD_ATTEMPTS: (console) => `Too many invalid password attempts on console: ${console}. Please unlock through Symitar security console.`,
     UNABLE_TO_DEDICATE_CONSOLE: (userID) => `Unable to dedicate console for UserID: ${userID}.`,
     USER_RECORD_IN_USE: (userID) => `The user record for UserID: ${userID} is currently in use.`,
+    ALL_SESSIONS_IN_USE: (console) => `All sessions for console ${console} are currently in use. Please close an existing session and try again.`,
 };
 //# sourceMappingURL=errors.js.map
 
 /***/ }),
 
-/***/ 20054:
+/***/ 88343:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -7226,31 +9678,32 @@ exports.execPromise = (0, util_1.promisify)(child_process_1.exec);
 
 /***/ }),
 
-/***/ 73878:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ 56177:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.paddedSymNumber = exports.handleKnownHosts = exports.convertToLinuxPath = exports.executeRsync = exports.executeRsyncCommand = exports.checkRsyncDependencies = exports.getMessageFromValidatePowerOn = exports.generateRandomPowerOnName = exports.buildValidationResult = exports.computeRemoteFileHash = exports.computeFileHash = exports.convertFileToBinary = void 0;
-var index_1 = __nccwpck_require__(39045);
-Object.defineProperty(exports, "convertFileToBinary", ({ enumerable: true, get: function () { return index_1.convertFileToBinary; } }));
-Object.defineProperty(exports, "computeFileHash", ({ enumerable: true, get: function () { return index_1.computeFileHash; } }));
-Object.defineProperty(exports, "computeRemoteFileHash", ({ enumerable: true, get: function () { return index_1.computeRemoteFileHash; } }));
-Object.defineProperty(exports, "buildValidationResult", ({ enumerable: true, get: function () { return index_1.buildValidationResult; } }));
-Object.defineProperty(exports, "generateRandomPowerOnName", ({ enumerable: true, get: function () { return index_1.generateRandomPowerOnName; } }));
-Object.defineProperty(exports, "getMessageFromValidatePowerOn", ({ enumerable: true, get: function () { return index_1.getMessageFromValidatePowerOn; } }));
-Object.defineProperty(exports, "checkRsyncDependencies", ({ enumerable: true, get: function () { return index_1.checkRsyncDependencies; } }));
-Object.defineProperty(exports, "executeRsyncCommand", ({ enumerable: true, get: function () { return index_1.executeRsyncCommand; } }));
-Object.defineProperty(exports, "executeRsync", ({ enumerable: true, get: function () { return index_1.executeRsync; } }));
-Object.defineProperty(exports, "convertToLinuxPath", ({ enumerable: true, get: function () { return index_1.convertToLinuxPath; } }));
-Object.defineProperty(exports, "handleKnownHosts", ({ enumerable: true, get: function () { return index_1.handleKnownHosts; } }));
-Object.defineProperty(exports, "paddedSymNumber", ({ enumerable: true, get: function () { return index_1.paddedSymNumber; } }));
+__exportStar(__nccwpck_require__(20906), exports);
 //# sourceMappingURL=helpers.js.map
 
 /***/ }),
 
-/***/ 74322:
+/***/ 3829:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -7338,23 +9791,281 @@ exports.computeRemoteFileHash = computeRemoteFileHash;
 
 /***/ }),
 
-/***/ 39045:
+/***/ 58633:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.stripPowerOnComments = stripPowerOnComments;
+exports.parseIncludeDirectives = parseIncludeDirectives;
+exports.rewriteIncludeDirectives = rewriteIncludeDirectives;
+exports.resolveLocalIncludes = resolveLocalIncludes;
+const fs = __importStar(__nccwpck_require__(79896));
+const path = __importStar(__nccwpck_require__(16928));
+const line_endings_1 = __nccwpck_require__(74689);
+const validationHelpers_1 = __nccwpck_require__(49398);
+const INCLUDE_DIRECTIVE_PATTERN = /^[ \t]*#INCLUDE[ \t]+"([^"\r\n]+)"/gim;
+const upper = (value) => value.toUpperCase();
+function stripPowerOnComments(content) {
+    const out = new Array(content.length);
+    const ranges = [];
+    let i = 0;
+    while (i < content.length) {
+        const ch = content[i];
+        if (ch === '"') {
+            out[i] = ch;
+            i++;
+            while (i < content.length) {
+                const sch = content[i];
+                out[i] = sch;
+                i++;
+                if (sch === '"')
+                    break;
+            }
+            continue;
+        }
+        if (ch === '[') {
+            const start = i;
+            let j = i;
+            while (j < content.length && content[j] !== ']') {
+                j++;
+            }
+            const end = j < content.length ? j + 1 : j;
+            for (let k = start; k < end; k++) {
+                out[k] = content[k] === '\n' ? '\n' : ' ';
+            }
+            ranges.push([start, end]);
+            i = end;
+            continue;
+        }
+        out[i] = ch;
+        i++;
+    }
+    return { stripped: out.join(''), commentRanges: ranges };
+}
+function parseIncludeDirectives(strippedContent) {
+    const results = [];
+    const re = new RegExp(INCLUDE_DIRECTIVE_PATTERN.source, 'gim');
+    let match;
+    while ((match = re.exec(strippedContent)) !== null) {
+        results.push({ name: match[1], index: match.index });
+    }
+    return results;
+}
+const indexInRanges = (index, ranges) => {
+    for (const [start, end] of ranges) {
+        if (index >= start && index < end)
+            return true;
+    }
+    return false;
+};
+function rewriteIncludeDirectives(originalContent, commentRanges, nameToTempName) {
+    if (nameToTempName.size === 0)
+        return originalContent;
+    const re = new RegExp(INCLUDE_DIRECTIVE_PATTERN.source, 'gim');
+    const pieces = [];
+    let lastIndex = 0;
+    let match;
+    while ((match = re.exec(originalContent)) !== null) {
+        const directiveStart = match.index;
+        if (indexInRanges(directiveStart, commentRanges))
+            continue;
+        const includeName = match[1];
+        const replacement = nameToTempName.get(upper(includeName));
+        if (!replacement)
+            continue;
+        const directive = match[0];
+        const firstQuote = directive.indexOf('"');
+        const lastQuote = directive.lastIndexOf('"');
+        if (firstQuote < 0 || lastQuote <= firstQuote)
+            continue;
+        const nameStart = directiveStart + firstQuote + 1;
+        const nameEnd = directiveStart + lastQuote;
+        pieces.push(originalContent.slice(lastIndex, nameStart));
+        pieces.push(replacement);
+        lastIndex = nameEnd;
+    }
+    pieces.push(originalContent.slice(lastIndex));
+    return pieces.join('');
+}
+const resolveWithinRoot = (rootDir, name) => {
+    const resolvedRoot = path.resolve(rootDir);
+    const candidate = path.resolve(resolvedRoot, name);
+    if (candidate !== resolvedRoot &&
+        !candidate.startsWith(resolvedRoot + path.sep)) {
+        return null;
+    }
+    return existsSafe(candidate) ? candidate : null;
+};
+const lookupLocalIncludePath = (name, args, upperLocalIncludes) => {
+    const { localIncludes, localIncludeDir, entryFilePath } = args;
+    if (upperLocalIncludes !== undefined) {
+        const hit = upperLocalIncludes.get(upper(name));
+        if (hit !== undefined)
+            return hit;
+    }
+    if (localIncludeDir !== undefined) {
+        return resolveWithinRoot(localIncludeDir, name);
+    }
+    if (localIncludes === undefined && localIncludeDir === undefined) {
+        return resolveWithinRoot(path.dirname(entryFilePath), name);
+    }
+    return null;
+};
+const existsSafe = (filePath) => {
+    try {
+        return fs.existsSync(filePath);
+    }
+    catch {
+        return false;
+    }
+};
+async function resolveLocalIncludes(args) {
+    const { entryContent, entryTempName, entryOriginalName, localIncludes, localIncludeDir, } = args;
+    if (localIncludes !== undefined) {
+        for (const [name, filePath] of Object.entries(localIncludes)) {
+            if (!existsSafe(filePath)) {
+                throw new Error(`Local include file not found: ${name} -> ${filePath}`);
+            }
+        }
+    }
+    if (localIncludeDir !== undefined) {
+        let isDir = false;
+        try {
+            const stat = await fs.promises.stat(localIncludeDir);
+            isDir = stat.isDirectory();
+        }
+        catch {
+            isDir = false;
+        }
+        if (!isDir) {
+            throw new Error(`Local include directory not found: ${localIncludeDir}`);
+        }
+    }
+    const upperLocalIncludes = localIncludes
+        ? new Map(Object.entries(localIncludes).map(([key, value]) => [
+            upper(key),
+            value,
+        ]))
+        : undefined;
+    const visited = new Map();
+    const order = [];
+    const entryStripped = stripPowerOnComments(entryContent);
+    const pendingNames = parseIncludeDirectives(entryStripped.stripped).map((d) => d.name);
+    while (pendingNames.length > 0) {
+        const name = pendingNames.shift();
+        const key = upper(name);
+        if (visited.has(key))
+            continue;
+        const localFilePath = lookupLocalIncludePath(name, args, upperLocalIncludes);
+        if (!localFilePath)
+            continue;
+        const raw = await fs.promises.readFile(localFilePath, 'utf8');
+        const normalized = (0, line_endings_1.normalizeStringLineEndings)(raw);
+        const stripped = stripPowerOnComments(normalized);
+        visited.set(key, {
+            originalName: name,
+            tempName: (0, validationHelpers_1.generateRandomPowerOnName)(),
+            localFilePath,
+            rawContent: normalized,
+            commentRanges: stripped.commentRanges,
+        });
+        order.push(key);
+        for (const { name: childName } of parseIncludeDirectives(stripped.stripped)) {
+            pendingNames.push(childName);
+        }
+    }
+    const nameToTempName = new Map();
+    for (const key of order) {
+        const entry = visited.get(key);
+        nameToTempName.set(key, entry.tempName);
+    }
+    const entryRewrittenContent = rewriteIncludeDirectives(entryContent, entryStripped.commentRanges, nameToTempName);
+    const includes = order.map((key) => {
+        const pending = visited.get(key);
+        return {
+            originalName: pending.originalName,
+            tempName: pending.tempName,
+            localFilePath: pending.localFilePath,
+            rewrittenContent: rewriteIncludeDirectives(pending.rawContent, pending.commentRanges, nameToTempName),
+        };
+    });
+    const tempToOriginal = new Map();
+    tempToOriginal.set(entryTempName, entryOriginalName);
+    for (const inc of includes) {
+        tempToOriginal.set(inc.tempName, inc.originalName);
+    }
+    return {
+        entryTempName,
+        entryRewrittenContent,
+        includes,
+        tempToOriginal,
+    };
+}
+//# sourceMappingURL=includeHelpers.js.map
+
+/***/ }),
+
+/***/ 20906:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.paddedSymNumber = exports.handleKnownHosts = exports.convertToLinuxPath = exports.executeRsync = exports.executeRsyncCommand = exports.checkRsyncDependencies = exports.getMessageFromValidatePowerOn = exports.generateRandomPowerOnName = exports.buildValidationResult = exports.computeRemoteFileHash = exports.computeFileHash = exports.convertFileToBinary = void 0;
-var fileHelpers_1 = __nccwpck_require__(74322);
+exports.paddedSymNumber = exports.handleKnownHosts = exports.convertToLinuxPath = exports.executeRsync = exports.executeRsyncCommand = exports.isRsyncAvailable = exports.checkRsyncDependencies = exports.stripPowerOnComments = exports.rewriteIncludeDirectives = exports.resolveLocalIncludes = exports.parseIncludeDirectives = exports.replaceValidationFileNames = exports.replaceValidationFileName = exports.getMessageFromValidatePowerOn = exports.generateRandomPowerOnName = exports.extractErrorFileName = exports.buildValidationResult = exports.computeRemoteFileHash = exports.computeFileHash = exports.convertFileToBinary = void 0;
+var fileHelpers_1 = __nccwpck_require__(3829);
 Object.defineProperty(exports, "convertFileToBinary", ({ enumerable: true, get: function () { return fileHelpers_1.convertFileToBinary; } }));
 Object.defineProperty(exports, "computeFileHash", ({ enumerable: true, get: function () { return fileHelpers_1.computeFileHash; } }));
 Object.defineProperty(exports, "computeRemoteFileHash", ({ enumerable: true, get: function () { return fileHelpers_1.computeRemoteFileHash; } }));
-var validationHelpers_1 = __nccwpck_require__(64709);
+var validationHelpers_1 = __nccwpck_require__(49398);
 Object.defineProperty(exports, "buildValidationResult", ({ enumerable: true, get: function () { return validationHelpers_1.buildValidationResult; } }));
+Object.defineProperty(exports, "extractErrorFileName", ({ enumerable: true, get: function () { return validationHelpers_1.extractErrorFileName; } }));
 Object.defineProperty(exports, "generateRandomPowerOnName", ({ enumerable: true, get: function () { return validationHelpers_1.generateRandomPowerOnName; } }));
 Object.defineProperty(exports, "getMessageFromValidatePowerOn", ({ enumerable: true, get: function () { return validationHelpers_1.getMessageFromValidatePowerOn; } }));
-var rsyncHelpers_1 = __nccwpck_require__(27727);
+Object.defineProperty(exports, "replaceValidationFileName", ({ enumerable: true, get: function () { return validationHelpers_1.replaceValidationFileName; } }));
+Object.defineProperty(exports, "replaceValidationFileNames", ({ enumerable: true, get: function () { return validationHelpers_1.replaceValidationFileNames; } }));
+var includeHelpers_1 = __nccwpck_require__(58633);
+Object.defineProperty(exports, "parseIncludeDirectives", ({ enumerable: true, get: function () { return includeHelpers_1.parseIncludeDirectives; } }));
+Object.defineProperty(exports, "resolveLocalIncludes", ({ enumerable: true, get: function () { return includeHelpers_1.resolveLocalIncludes; } }));
+Object.defineProperty(exports, "rewriteIncludeDirectives", ({ enumerable: true, get: function () { return includeHelpers_1.rewriteIncludeDirectives; } }));
+Object.defineProperty(exports, "stripPowerOnComments", ({ enumerable: true, get: function () { return includeHelpers_1.stripPowerOnComments; } }));
+var rsyncHelpers_1 = __nccwpck_require__(53062);
 Object.defineProperty(exports, "checkRsyncDependencies", ({ enumerable: true, get: function () { return rsyncHelpers_1.checkRsyncDependencies; } }));
+Object.defineProperty(exports, "isRsyncAvailable", ({ enumerable: true, get: function () { return rsyncHelpers_1.isRsyncAvailable; } }));
 Object.defineProperty(exports, "executeRsyncCommand", ({ enumerable: true, get: function () { return rsyncHelpers_1.executeRsyncCommand; } }));
 Object.defineProperty(exports, "executeRsync", ({ enumerable: true, get: function () { return rsyncHelpers_1.executeRsync; } }));
 Object.defineProperty(exports, "convertToLinuxPath", ({ enumerable: true, get: function () { return rsyncHelpers_1.convertToLinuxPath; } }));
@@ -7367,19 +10078,56 @@ exports.paddedSymNumber = paddedSymNumber;
 
 /***/ }),
 
-/***/ 27727:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ 53062:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.executeRsync = exports.handleKnownHosts = exports.convertToLinuxPath = exports.executeRsyncCommand = exports.checkRsyncDependencies = void 0;
+exports.executeRsync = exports.handleKnownHosts = exports.convertToLinuxPath = exports.executeRsyncCommand = exports.checkRsyncDependencies = exports.isRsyncAvailable = void 0;
+const path = __importStar(__nccwpck_require__(16928));
+const fs = __importStar(__nccwpck_require__(79896));
 const child_process_1 = __nccwpck_require__(35317);
-const constants_1 = __nccwpck_require__(88922);
-const exec_1 = __nccwpck_require__(20054);
-const paths_1 = __nccwpck_require__(30647);
-const scripts_1 = __nccwpck_require__(52819);
-const types_1 = __nccwpck_require__(27118);
+const constants_1 = __nccwpck_require__(90857);
+const exec_1 = __nccwpck_require__(88343);
+const paths_1 = __nccwpck_require__(84576);
+const scripts_1 = __nccwpck_require__(54868);
+const types_1 = __nccwpck_require__(19233);
+const ssh_utils_1 = __nccwpck_require__(82334);
+const line_endings_1 = __nccwpck_require__(74689);
 const runBashScript = async (script, args = []) => {
     const isWindows = process.platform === 'win32';
     const command = isWindows ? 'wsl' : 'bash';
@@ -7410,6 +10158,16 @@ const runBashScript = async (script, args = []) => {
         child.on('error', reject);
     });
 };
+const isRsyncAvailable = async () => {
+    try {
+        await (0, exports.checkRsyncDependencies)();
+        return true;
+    }
+    catch {
+        return false;
+    }
+};
+exports.isRsyncAvailable = isRsyncAvailable;
 const checkRsyncDependencies = async () => {
     let isRsyncCompatible;
     let hasRsync;
@@ -7529,61 +10287,138 @@ const handleKnownHosts = async (host, fallbackToNoStrictHostKeyChecking = true) 
 exports.handleKnownHosts = handleKnownHosts;
 const executeRsync = async (config, isDryRun = true) => {
     const syncMode = config.syncMode || types_1.SymitarSyncMode.MIRROR;
-    const remoteDirectory = `${config.username}@${config.host}:${(0, paths_1.getRemoteDirectoryPath)(config.symNumber, config.remoteDirectory)}`;
-    const localDirectory = process.platform === 'win32'
-        ? (0, exports.convertToLinuxPath)(config.localDirectory)
-        : config.localDirectory;
-    await (0, exports.checkRsyncDependencies)();
-    const knownHostsResult = await (0, exports.handleKnownHosts)(config.host);
-    const rsyncFlags = [isDryRun ? '-rzvLn' : '-rzvL'];
-    if (syncMode === types_1.SymitarSyncMode.MIRROR) {
-        rsyncFlags.push('--delete');
-    }
-    rsyncFlags.push('--no-group', '--no-perms', '--itemize-changes', '--out-format="%i %n"', '--size-only', '--chmod=ug=rwX,o=');
-    const sshOptions = knownHostsResult.useStrictHostKeyChecking
-        ? '-e "ssh"'
-        : '-e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"';
-    rsyncFlags.push(sshOptions);
     const isPull = syncMode === types_1.SymitarSyncMode.PULL;
-    const source = isPull ? remoteDirectory : localDirectory;
-    const destination = isPull ? localDirectory : remoteDirectory;
-    const rsyncCommand = [
-        process.platform === 'win32'
-            ? `wsl -e sshpass -p "${config.password}"`
-            : `sshpass -p "${config.password}"`,
-        'rsync',
-        ...rsyncFlags,
-        source,
-        destination,
-    ].join(' ');
-    const changedPowerOns = {
-        deleted: [],
-        deployed: [],
-    };
-    const output = await (0, exports.executeRsyncCommand)(rsyncCommand);
-    const lines = output.split('\n').map((line) => line.trim());
-    for (const line of lines) {
-        if (line.startsWith('*deleting')) {
-            const filename = line.replace('*deleting', '').trim().split(' ').pop() || '';
-            if (filename !== '') {
-                changedPowerOns.deleted.push(filename);
+    const preserveServerFiles = config.preserveServerFiles || [];
+    const pullPreservedOnly = isPull && config.pullPreservedOnly === true;
+    let stagedLocalDirectory;
+    if (pullPreservedOnly && preserveServerFiles.length === 0) {
+        return { deleted: [], deployed: [] };
+    }
+    try {
+        stagedLocalDirectory =
+            fs.existsSync(config.localDirectory) &&
+                fs.statSync(config.localDirectory).isDirectory()
+                ? await (0, line_endings_1.createNormalizedDirectoryCopy)(config.localDirectory)
+                : undefined;
+        const localDirectoryForSync = !isPull && stagedLocalDirectory
+            ? `${stagedLocalDirectory}/`
+            : config.localDirectory;
+        const remoteDirectory = `${config.username}@${config.host}:${(0, paths_1.getRemoteDirectoryPath)(config.symNumber, config.remoteDirectory)}`;
+        const localDirectory = process.platform === 'win32'
+            ? (0, exports.convertToLinuxPath)(localDirectoryForSync)
+            : localDirectoryForSync;
+        const compareDirectory = isPull && stagedLocalDirectory
+            ? process.platform === 'win32'
+                ? (0, exports.convertToLinuxPath)(stagedLocalDirectory)
+                : stagedLocalDirectory
+            : undefined;
+        await (0, exports.checkRsyncDependencies)();
+        const knownHostsResult = await (0, exports.handleKnownHosts)(config.host);
+        const rsyncFlags = [isDryRun ? '-rzvLn' : '-rzvL'];
+        if (syncMode === types_1.SymitarSyncMode.MIRROR) {
+            rsyncFlags.push('--delete');
+        }
+        if (pullPreservedOnly) {
+            for (const pattern of preserveServerFiles) {
+                rsyncFlags.push(`--include=${(0, ssh_utils_1.escapeShellArg)(pattern)}`);
+            }
+            rsyncFlags.push('--exclude="*"');
+        }
+        else if (!isPull) {
+            for (const pattern of preserveServerFiles) {
+                rsyncFlags.push(`--exclude=${(0, ssh_utils_1.escapeShellArg)(pattern)}`);
             }
         }
-        else if (line.startsWith('<f') || line.startsWith('>f')) {
-            const filename = line.slice(10).trim().split(' ').pop() || '';
-            if (filename !== '') {
-                changedPowerOns.deployed.push(filename);
+        rsyncFlags.push('--no-group', '--no-perms', '--itemize-changes', '--out-format="%i %n"', '--chmod=ug=rwX,o=');
+        if (config.compareMode === 'checksum') {
+            rsyncFlags.push('--checksum');
+        }
+        else {
+            rsyncFlags.push('--size-only');
+        }
+        if (compareDirectory) {
+            rsyncFlags.push(`--compare-dest=${(0, ssh_utils_1.escapeShellArg)(compareDirectory)}`);
+        }
+        const sshOptions = knownHostsResult.useStrictHostKeyChecking
+            ? '-e "ssh"'
+            : '-e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"';
+        rsyncFlags.push(sshOptions);
+        const source = isPull ? remoteDirectory : localDirectory;
+        const destination = isPull ? localDirectory : remoteDirectory;
+        const rsyncCommand = [
+            process.platform === 'win32'
+                ? `wsl -e sshpass -p "${config.password}"`
+                : `sshpass -p "${config.password}"`,
+            'rsync',
+            ...rsyncFlags,
+            source,
+            destination,
+        ].join(' ');
+        const changedPowerOns = {
+            deleted: [],
+            deployed: [],
+        };
+        const output = await (0, exports.executeRsyncCommand)(rsyncCommand);
+        const lines = output.split('\n').map((line) => line.trim());
+        for (const line of lines) {
+            if (line.startsWith('*deleting')) {
+                const filename = line.replace('*deleting', '').trim().split(' ').pop() || '';
+                if (filename !== '') {
+                    changedPowerOns.deleted.push(filename);
+                }
             }
+            else if (line.startsWith('<f') || line.startsWith('>f')) {
+                const filename = line.slice(10).trim().split(' ').pop() || '';
+                if (filename !== '') {
+                    changedPowerOns.deployed.push(filename);
+                }
+            }
+        }
+        if (!isDryRun && !isPull && changedPowerOns.deployed.length > 0) {
+            const symGroup = path.basename((0, paths_1.getSymDirectory)(config.symNumber));
+            const remoteDir = (0, paths_1.getRemoteDirectoryPath)(config.symNumber, config.remoteDirectory);
+            const sshPrefix = process.platform === 'win32'
+                ? `wsl -e sshpass -p "${config.password}"`
+                : `sshpass -p "${config.password}"`;
+            const sshOptions = knownHostsResult.useStrictHostKeyChecking
+                ? ''
+                : '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null';
+            const fileArgs = changedPowerOns.deployed
+                .map((f) => (0, ssh_utils_1.escapeShellArg)(`${remoteDir}${f}`))
+                .join(' ');
+            const chgrpCommand = [
+                sshPrefix,
+                'ssh',
+                sshOptions,
+                `${config.username}@${config.host}`,
+                `chgrp ${(0, ssh_utils_1.escapeShellArg)(symGroup)} ${fileArgs}`,
+            ]
+                .filter(Boolean)
+                .join(' ');
+            try {
+                await (0, exports.executeRsyncCommand)(chgrpCommand);
+            }
+            catch (error) {
+                throw new Error(`Failed to set group ownership to ${symGroup} after rsync: ${error.message}`);
+            }
+        }
+        return changedPowerOns;
+    }
+    finally {
+        if (stagedLocalDirectory) {
+            await fs.promises.rm(path.dirname(stagedLocalDirectory), {
+                recursive: true,
+                force: true,
+            });
         }
     }
-    return changedPowerOns;
 };
 exports.executeRsync = executeRsync;
 //# sourceMappingURL=rsyncHelpers.js.map
 
 /***/ }),
 
-/***/ 64709:
+/***/ 49398:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -7622,16 +10457,59 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getMessageFromValidatePowerOn = exports.generateRandomPowerOnName = exports.buildValidationResult = void 0;
-const crypto = __importStar(__nccwpck_require__(76982));
-const buildValidationResult = (errors, fileName, powerOnName) => {
-    if (!errors) {
-        return [true, null];
-    }
-    const message = (0, exports.getMessageFromValidatePowerOn)(errors[0]?.replace(fileName, powerOnName));
-    return [false, message];
-};
+exports.getMessageFromValidatePowerOn = exports.generateRandomPowerOnName = exports.extractErrorFileName = exports.replaceValidationFileNames = exports.replaceValidationFileName = void 0;
 exports.buildValidationResult = buildValidationResult;
+const crypto = __importStar(__nccwpck_require__(76982));
+const ERROR_FILE_PATTERN = /ERROR in file\s+([^\s~]+)/i;
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const replaceValidationFileName = (errors, tempFileName, originalFileName) => {
+    if (!errors)
+        return '';
+    return errors.replace(new RegExp(escapeRegExp(tempFileName), 'g'), originalFileName);
+};
+exports.replaceValidationFileName = replaceValidationFileName;
+const replaceValidationFileNames = (errors, tempToOriginal) => {
+    if (!errors)
+        return '';
+    if (tempToOriginal.size === 0)
+        return errors;
+    let result = errors;
+    for (const [tempName, originalName] of tempToOriginal) {
+        result = result.replace(new RegExp(escapeRegExp(tempName), 'g'), originalName);
+    }
+    return result;
+};
+exports.replaceValidationFileNames = replaceValidationFileNames;
+const extractErrorFileName = (errors) => {
+    const match = errors.match(ERROR_FILE_PATTERN);
+    return match?.[1];
+};
+exports.extractErrorFileName = extractErrorFileName;
+function buildValidationResult(errors, fileNameOrMap, powerOnName) {
+    if (!errors) {
+        return [true, null, undefined];
+    }
+    const rawError = errors[0];
+    const rawErrorFileName = (0, exports.extractErrorFileName)(rawError);
+    let errorFileName;
+    let remappedRawError;
+    if (fileNameOrMap instanceof Map) {
+        const tempToOriginal = fileNameOrMap;
+        errorFileName =
+            rawErrorFileName !== undefined
+                ? (tempToOriginal.get(rawErrorFileName) ?? rawErrorFileName)
+                : undefined;
+        remappedRawError = (0, exports.replaceValidationFileNames)(rawError, tempToOriginal);
+    }
+    else {
+        const fileName = fileNameOrMap;
+        const original = powerOnName ?? fileName;
+        errorFileName = rawErrorFileName === fileName ? original : rawErrorFileName;
+        remappedRawError = (0, exports.replaceValidationFileName)(rawError, fileName, original);
+    }
+    const message = (0, exports.getMessageFromValidatePowerOn)(remappedRawError);
+    return [false, message, errorFileName];
+}
 const generateRandomPowerOnName = () => {
     return `LB.${crypto.randomBytes(8).toString('hex').toUpperCase()}.PO`;
 };
@@ -7658,7 +10536,7 @@ exports.getMessageFromValidatePowerOn = getMessageFromValidatePowerOn;
 
 /***/ }),
 
-/***/ 72819:
+/***/ 78006:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -7688,7 +10566,124 @@ exports.BaseSymitarClient = BaseSymitarClient;
 
 /***/ }),
 
-/***/ 6358:
+/***/ 74689:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isBinaryBuffer = isBinaryBuffer;
+exports.normalizeBufferLineEndings = normalizeBufferLineEndings;
+exports.normalizeStringLineEndings = normalizeStringLineEndings;
+exports.getNormalizedFileSize = getNormalizedFileSize;
+exports.createNormalizedDirectoryCopy = createNormalizedDirectoryCopy;
+const fs = __importStar(__nccwpck_require__(79896));
+const os = __importStar(__nccwpck_require__(70857));
+const path = __importStar(__nccwpck_require__(16928));
+const NULL_BYTE_SCAN_LIMIT = 8192;
+function isBinaryBuffer(buffer) {
+    const bytesToCheck = Math.min(buffer.length, NULL_BYTE_SCAN_LIMIT);
+    for (let i = 0; i < bytesToCheck; i++) {
+        if (buffer[i] === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+function normalizeBufferLineEndings(buffer) {
+    if (isBinaryBuffer(buffer)) {
+        return buffer;
+    }
+    const normalized = normalizeStringLineEndings(buffer.toString('utf8'));
+    return Buffer.from(normalized, 'utf8');
+}
+function normalizeStringLineEndings(content) {
+    return content.replace(/\r\n?/g, '\n');
+}
+async function getNormalizedFileSize(filePath) {
+    const data = await fs.promises.readFile(filePath);
+    return normalizeBufferLineEndings(data).length;
+}
+async function createNormalizedDirectoryCopy(sourceDirectory) {
+    const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'symitar-sync-'));
+    const tempDirectory = path.join(tempRoot, 'source');
+    await copyDirectory(sourceDirectory, tempDirectory);
+    return tempDirectory;
+}
+async function copyDirectory(sourceDirectory, targetDirectory) {
+    await fs.promises.mkdir(targetDirectory, { recursive: true });
+    const entries = await fs.promises.readdir(sourceDirectory, {
+        withFileTypes: true,
+    });
+    for (const entry of entries) {
+        const sourcePath = path.join(sourceDirectory, entry.name);
+        const targetPath = path.join(targetDirectory, entry.name);
+        if (entry.isDirectory()) {
+            await copyDirectory(sourcePath, targetPath);
+            continue;
+        }
+        if (entry.isSymbolicLink()) {
+            const realPath = await fs.promises.realpath(sourcePath);
+            const stats = await fs.promises.stat(realPath);
+            if (stats.isDirectory()) {
+                await copyDirectory(realPath, targetPath);
+            }
+            else if (stats.isFile()) {
+                await copyFile(realPath, targetPath, stats.mode, stats.atime, stats.mtime);
+            }
+            continue;
+        }
+        if (entry.isFile()) {
+            const stats = await fs.promises.stat(sourcePath);
+            await copyFile(sourcePath, targetPath, stats.mode, stats.atime, stats.mtime);
+        }
+    }
+}
+async function copyFile(sourcePath, targetPath, mode, atime, mtime) {
+    const data = await fs.promises.readFile(sourcePath);
+    await fs.promises.writeFile(targetPath, normalizeBufferLineEndings(data), {
+        mode,
+    });
+    await fs.promises.utimes(targetPath, atime, mtime);
+}
+//# sourceMappingURL=line-endings.js.map
+
+/***/ }),
+
+/***/ 37533:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -7697,18 +10692,35 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.mayContainCredentials = exports.sanitizeForLogging = void 0;
+exports.mayContainCredentials = exports.sanitizeForLogging = exports.escapeControlChars = void 0;
 exports.createTransports = createTransports;
 exports.createLogger = createLogger;
 const stream_1 = __nccwpck_require__(2203);
-const winston_1 = __importDefault(__nccwpck_require__(68360));
+const winston_1 = __importDefault(__nccwpck_require__(45530));
 const SSHPASS_PATTERN = /sshpass\s+-p\s+["']?[^"'\s]+["']?/gi;
 const SYMITAR_CREDENTIAL_PATTERN = /(\d{1,5})\.([^\s\r\n~]+)/g;
 const PASSWORD_VALUE_PATTERN = /password[=:]\s*["']?[^"'\s\r\n]+["']?/gi;
+const escapeControlChars = (message) => {
+    if (!message)
+        return message;
+    return message.replace(/[\x00-\x1f\x7f]/g, (char) => {
+        const code = char.charCodeAt(0);
+        if (code === 0x1b)
+            return '\\e';
+        if (code === 0x0a)
+            return '\\n';
+        if (code === 0x0d)
+            return '\\r';
+        if (code === 0x09)
+            return '\\t';
+        return `\\x${code.toString(16).padStart(2, '0')}`;
+    });
+};
+exports.escapeControlChars = escapeControlChars;
 const sanitizeForLogging = (message) => {
     if (!message)
         return message;
-    return (message
+    return (0, exports.escapeControlChars)(message
         .replace(SSHPASS_PATTERN, 'sshpass -p *****')
         .replace(SYMITAR_CREDENTIAL_PATTERN, '$1.*****')
         .replace(PASSWORD_VALUE_PATTERN, 'password=*****'));
@@ -7764,14 +10776,14 @@ function createLogger(logLevel, customLogger) {
 
 /***/ }),
 
-/***/ 30647:
+/***/ 84576:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getRemoteDirectoryPath = exports.getRemoteFilePath = exports.getSymDirectory = void 0;
-const helpers_1 = __nccwpck_require__(73878);
+const helpers_1 = __nccwpck_require__(56177);
 const getSymDirectory = (symNumber) => {
     return `/SYM/SYM${(0, helpers_1.paddedSymNumber)(symNumber)}`;
 };
@@ -7788,7 +10800,7 @@ exports.getRemoteDirectoryPath = getRemoteDirectoryPath;
 
 /***/ }),
 
-/***/ 62593:
+/***/ 80974:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -7950,7 +10962,575 @@ async function getSkipReasonForFile(filePath) {
 
 /***/ }),
 
-/***/ 52819:
+/***/ 11979:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.disconnectReportsSyncService = exports.getReportsSyncService = exports.ReportsSyncService = exports.ReportsRetentionPeriod = void 0;
+const ssh2_1 = __nccwpck_require__(41828);
+const fs = __importStar(__nccwpck_require__(79896));
+const path = __importStar(__nccwpck_require__(16928));
+const util_1 = __nccwpck_require__(39023);
+const errors_1 = __nccwpck_require__(68677);
+const fsMkdir = (0, util_1.promisify)(fs.mkdir);
+const fsUtimes = (0, util_1.promisify)(fs.utimes);
+const fsReadFile = (0, util_1.promisify)(fs.readFile);
+const fsWriteFile = (0, util_1.promisify)(fs.writeFile);
+const fsReaddir = (0, util_1.promisify)(fs.readdir);
+const fsStat = (0, util_1.promisify)(fs.stat);
+const fsUnlink = (0, util_1.promisify)(fs.unlink);
+const DEFAULT_CONCURRENCY = 20;
+const METADATA_FILE = '.reports-sync-metadata.json';
+const PROGRAM_PATTERN = /^%PROGRAM\s+(.+?)[\s\r\n]*$/m;
+const SEQ_TITLE_PATTERN = /Seq:\s*(\d+)\s+Pages:\s*\d+\s+Title:\s*(.+?)[\s\r\n]*$/gm;
+var ReportsRetentionPeriod;
+(function (ReportsRetentionPeriod) {
+    ReportsRetentionPeriod[ReportsRetentionPeriod["THIRTY_DAYS"] = 30] = "THIRTY_DAYS";
+    ReportsRetentionPeriod[ReportsRetentionPeriod["SIXTY_DAYS"] = 60] = "SIXTY_DAYS";
+    ReportsRetentionPeriod[ReportsRetentionPeriod["NINETY_DAYS"] = 90] = "NINETY_DAYS";
+    ReportsRetentionPeriod[ReportsRetentionPeriod["ONE_HUNDRED_EIGHTY_DAYS"] = 180] = "ONE_HUNDRED_EIGHTY_DAYS";
+    ReportsRetentionPeriod[ReportsRetentionPeriod["ONE_YEAR"] = 365] = "ONE_YEAR";
+})(ReportsRetentionPeriod || (exports.ReportsRetentionPeriod = ReportsRetentionPeriod = {}));
+class ReportsSyncService {
+    client = null;
+    sftp = null;
+    currentHost = null;
+    currentPort = null;
+    currentUsername = null;
+    logger = null;
+    logPrefix = '[ReportsSyncService]';
+    async listRemoteReports(config, logger) {
+        this.logger = logger || null;
+        try {
+            await this.connect(config);
+        }
+        catch (err) {
+            const message = err.message || String(err);
+            this.log('error', `Connection failed: ${message}`);
+            throw new errors_1.SymitarConnectionError(`Failed to connect to ${config.host}: ${message}`, config.host, err);
+        }
+        if (!this.sftp) {
+            throw new errors_1.SymitarConnectionError('SFTP connection not established', config.host);
+        }
+        const remotePath = this.getRemotePath(config.symNumber);
+        const files = await this.listRemoteFiles(remotePath);
+        const validFiles = files.filter((f) => this.isValidReportFile(f.name));
+        return this.filterByRetention(validFiles, config.retentionDays);
+    }
+    async syncReports(config, logger) {
+        this.logger = logger || null;
+        const result = {
+            downloaded: [],
+            skipped: [],
+            errors: [],
+        };
+        const concurrency = config.concurrency || DEFAULT_CONCURRENCY;
+        const localReportsPath = this.getLocalReportsPath(config);
+        await this.ensureLocalDirectory(localReportsPath);
+        const metadata = await this.loadMetadata(localReportsPath);
+        config.onProgress?.({ phase: 'connecting', current: 0, total: 0 });
+        try {
+            await this.connect(config);
+        }
+        catch (err) {
+            const message = err.message || String(err);
+            this.log('error', `Connection failed: ${message}`);
+            throw new errors_1.SymitarConnectionError(`Failed to connect to ${config.host}: ${message}`, config.host, err);
+        }
+        if (!this.sftp) {
+            throw new errors_1.SymitarConnectionError('SFTP connection not established', config.host);
+        }
+        try {
+            config.onProgress?.({ phase: 'listing', current: 0, total: 0 });
+            const remotePath = this.getRemotePath(config.symNumber);
+            const remoteFiles = await this.listRemoteFiles(remotePath);
+            const validFiles = remoteFiles.filter((f) => this.isValidReportFile(f.name));
+            const filesInRetention = this.filterByRetention(validFiles, config.retentionDays);
+            const toDownload = [];
+            for (const file of filesInRetention) {
+                if (metadata.downloadedFiles[file.name] !== undefined) {
+                    result.skipped.push(file.name);
+                }
+                else {
+                    toDownload.push(file);
+                }
+            }
+            this.log('info', `Found ${toDownload.length} new reports to download, ${result.skipped.length} already synced`);
+            const totalOperations = toDownload.length;
+            let completed = 0;
+            const downloadQueue = [...toDownload];
+            const activeOps = [];
+            const startDownload = (file) => {
+                const remoteFilePath = this.joinPosixPath(remotePath, file.name);
+                const localFilePath = path.join(localReportsPath, file.name);
+                return this.downloadFile(remoteFilePath, localFilePath, file.mtime)
+                    .then(() => {
+                    result.downloaded.push(file.name);
+                    metadata.downloadedFiles[file.name] = file.mtime;
+                })
+                    .catch((err) => {
+                    result.errors.push({
+                        file: file.name,
+                        error: err.message || String(err),
+                    });
+                })
+                    .finally(() => {
+                    completed++;
+                    config.onProgress?.({
+                        phase: 'downloading',
+                        current: completed,
+                        total: totalOperations,
+                        currentFile: file.name,
+                    });
+                });
+            };
+            while (downloadQueue.length > 0 || activeOps.length > 0) {
+                while (activeOps.length < concurrency && downloadQueue.length > 0) {
+                    const file = downloadQueue.shift();
+                    const op = startDownload(file).then(() => {
+                        const idx = activeOps.indexOf(op);
+                        if (idx !== -1) {
+                            activeOps.splice(idx, 1);
+                        }
+                    });
+                    activeOps.push(op);
+                }
+                if (activeOps.length > 0) {
+                    await Promise.race(activeOps);
+                }
+            }
+            if (result.downloaded.length > 0) {
+                result.titles = await this.processReportTitles(localReportsPath, result.downloaded, metadata);
+            }
+            else {
+                result.titles = metadata.titles || {};
+            }
+            metadata.lastSyncTime = Date.now();
+            metadata.retentionDays = config.retentionDays;
+            metadata.symNumber = config.symNumber;
+            metadata.host = config.host;
+            await this.saveMetadata(localReportsPath, metadata);
+            config.onProgress?.({
+                phase: 'complete',
+                current: totalOperations,
+                total: totalOperations,
+            });
+            this.log('info', `Sync complete: ${result.downloaded.length} downloaded, ${result.skipped.length} skipped`);
+        }
+        catch (err) {
+            result.errors.push({
+                file: '',
+                error: `Sync failed: ${err.message || String(err)}`,
+            });
+            this.log('error', `Sync failed: ${err.message}`);
+        }
+        return result;
+    }
+    async refreshReports(config, logger) {
+        this.logger = logger || null;
+        const localReportsPath = this.getLocalReportsPath(config);
+        await this.ensureLocalDirectory(localReportsPath);
+        const deletedCount = await this.cleanupOldReports(localReportsPath, config.retentionDays);
+        if (deletedCount > 0) {
+            this.log('info', `Deleted ${deletedCount} reports outside retention period`);
+        }
+        const emptyMetadata = {
+            lastSyncTime: 0,
+            downloadedFiles: {},
+            retentionDays: config.retentionDays,
+            symNumber: config.symNumber,
+            host: config.host,
+            titles: {},
+        };
+        await this.saveMetadata(localReportsPath, emptyMetadata);
+        return this.syncReports(config, logger);
+    }
+    async cleanupOldReports(localReportsPath, retentionDays) {
+        const cutoffTime = Math.floor(Date.now() / 1000) - retentionDays * 24 * 60 * 60;
+        let deletedCount = 0;
+        try {
+            const files = await fsReaddir(localReportsPath);
+            for (const file of files) {
+                if (!this.isValidReportFile(file)) {
+                    continue;
+                }
+                const filePath = path.join(localReportsPath, file);
+                try {
+                    const stats = await fsStat(filePath);
+                    const mtimeSeconds = Math.floor(stats.mtimeMs / 1000);
+                    if (mtimeSeconds < cutoffTime) {
+                        await fsUnlink(filePath);
+                        deletedCount++;
+                        this.log('debug', `Deleted old report: ${file}`);
+                    }
+                }
+                catch (err) {
+                    this.log('warn', `Failed to check/delete ${file}: ${err.message}`);
+                }
+            }
+        }
+        catch (err) {
+            if (err.code !== 'ENOENT') {
+                this.log('warn', `Failed to list directory for cleanup: ${err.message}`);
+            }
+        }
+        return deletedCount;
+    }
+    async checkForNewReports(config, logger) {
+        this.logger = logger || null;
+        const localReportsPath = this.getLocalReportsPath(config);
+        const metadata = await this.loadMetadata(localReportsPath);
+        try {
+            await this.connect(config);
+        }
+        catch (err) {
+            const message = err.message || String(err);
+            this.log('error', `Connection failed: ${message}`);
+            throw new errors_1.SymitarConnectionError(`Failed to connect to ${config.host}: ${message}`, config.host, err);
+        }
+        if (!this.sftp) {
+            throw new errors_1.SymitarConnectionError('SFTP connection not established', config.host);
+        }
+        const remotePath = this.getRemotePath(config.symNumber);
+        const remoteFiles = await this.listRemoteFiles(remotePath);
+        const validFiles = remoteFiles.filter((f) => this.isValidReportFile(f.name));
+        const filesInRetention = this.filterByRetention(validFiles, config.retentionDays);
+        return filesInRetention.filter((f) => metadata.downloadedFiles[f.name] === undefined);
+    }
+    async getTitles(config) {
+        const localReportsPath = this.getLocalReportsPath(config);
+        const metadata = await this.loadMetadata(localReportsPath);
+        return metadata.titles || {};
+    }
+    isValidReportFile(fileName) {
+        if (fileName.startsWith('_'))
+            return false;
+        if (fileName.includes('.'))
+            return false;
+        return /^\d+$/.test(fileName);
+    }
+    getLocalReportsPath(config) {
+        const paddedSym = String(config.symNumber).padStart(3, '0');
+        return path.join(config.localSymitarPath, '.reports', config.host, `SYM${paddedSym}`);
+    }
+    getRemotePath(symNumber) {
+        const paddedSym = String(symNumber).padStart(3, '0');
+        return `/SYM/SYM${paddedSym}/REPORT/`;
+    }
+    filterByRetention(files, retentionDays) {
+        const cutoffTime = Math.floor(Date.now() / 1000) - retentionDays * 24 * 60 * 60;
+        return files.filter((f) => f.mtime >= cutoffTime);
+    }
+    async loadMetadata(localReportsPath) {
+        const metadataPath = path.join(localReportsPath, METADATA_FILE);
+        try {
+            const content = await fsReadFile(metadataPath, 'utf8');
+            const metadata = JSON.parse(content);
+            if (!metadata.titles) {
+                metadata.titles = {};
+            }
+            return metadata;
+        }
+        catch {
+            return {
+                lastSyncTime: 0,
+                downloadedFiles: {},
+                retentionDays: ReportsRetentionPeriod.NINETY_DAYS,
+                symNumber: 0,
+                host: '',
+                titles: {},
+            };
+        }
+    }
+    async saveMetadata(localReportsPath, metadata) {
+        await this.ensureLocalDirectory(localReportsPath);
+        const metadataPath = path.join(localReportsPath, METADATA_FILE);
+        await fsWriteFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+    }
+    async connect(config) {
+        const { host, port = 22, username, password } = config;
+        if (this.client &&
+            this.sftp &&
+            this.currentHost === host &&
+            this.currentPort === port &&
+            this.currentUsername === username) {
+            return;
+        }
+        await this.disconnect();
+        return new Promise((resolve, reject) => {
+            this.client = new ssh2_1.Client();
+            let settled = false;
+            const connectionTimeout = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    this.client?.end();
+                    reject(new Error('Connection timed out'));
+                }
+            }, 15000);
+            this.client.on('ready', () => {
+                this.client.sftp((err, sftp) => {
+                    if (settled)
+                        return;
+                    clearTimeout(connectionTimeout);
+                    settled = true;
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    this.sftp = sftp;
+                    this.currentHost = host;
+                    this.currentPort = port;
+                    this.currentUsername = username;
+                    this.log('debug', `Connected to ${host}:${port}`);
+                    resolve();
+                });
+            });
+            this.client.on('error', (err) => {
+                if (settled)
+                    return;
+                clearTimeout(connectionTimeout);
+                settled = true;
+                reject(err);
+            });
+            this.client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
+                const responses = prompts.map(() => password);
+                finish(responses);
+            });
+            const connectConfig = {
+                host,
+                port,
+                username,
+                password,
+                tryKeyboard: true,
+                readyTimeout: 15000,
+                algorithms: {
+                    kex: [
+                        'ecdh-sha2-nistp256',
+                        'ecdh-sha2-nistp384',
+                        'ecdh-sha2-nistp521',
+                        'diffie-hellman-group-exchange-sha256',
+                        'diffie-hellman-group14-sha256',
+                        'diffie-hellman-group14-sha1',
+                        'diffie-hellman-group1-sha1',
+                    ],
+                    cipher: [
+                        'aes128-ctr',
+                        'aes192-ctr',
+                        'aes256-ctr',
+                        'aes128-gcm@openssh.com',
+                        'aes256-gcm@openssh.com',
+                        'aes256-cbc',
+                        'aes192-cbc',
+                        'aes128-cbc',
+                        '3des-cbc',
+                    ],
+                    serverHostKey: [
+                        'ssh-rsa',
+                        'ecdsa-sha2-nistp256',
+                        'ecdsa-sha2-nistp384',
+                        'ecdsa-sha2-nistp521',
+                        'ssh-ed25519',
+                        'rsa-sha2-256',
+                        'rsa-sha2-512',
+                    ],
+                    hmac: ['hmac-sha2-256', 'hmac-sha2-512', 'hmac-sha1'],
+                },
+            };
+            this.client.connect(connectConfig);
+        });
+    }
+    async listRemoteFiles(remotePath) {
+        return new Promise((resolve, reject) => {
+            if (!this.sftp) {
+                reject(new Error('SFTP not connected'));
+                return;
+            }
+            this.sftp.readdir(remotePath, (err, list) => {
+                if (err) {
+                    if (err.code === 2) {
+                        resolve([]);
+                        return;
+                    }
+                    if (err.code === 3) {
+                        reject(new errors_1.SymitarPermissionError(`Permission denied: ${remotePath}`, remotePath, err instanceof Error ? err : undefined));
+                        return;
+                    }
+                    reject(err);
+                    return;
+                }
+                const files = list
+                    .filter((entry) => {
+                    const attrs = entry.attrs;
+                    return attrs && !this.isDirectory(attrs.mode);
+                })
+                    .map((entry) => ({
+                    name: entry.filename,
+                    size: entry.attrs.size,
+                    mtime: entry.attrs.mtime,
+                }));
+                resolve(files);
+            });
+        });
+    }
+    async downloadFile(remotePath, localPath, mtime) {
+        await this.ensureLocalDirectory(path.dirname(localPath));
+        return new Promise((resolve, reject) => {
+            if (!this.sftp) {
+                reject(new Error('SFTP not connected'));
+                return;
+            }
+            this.sftp.fastGet(remotePath, localPath, (err) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                const mtimeDate = new Date(mtime * 1000);
+                fsUtimes(localPath, mtimeDate, mtimeDate)
+                    .then(() => resolve())
+                    .catch(() => resolve());
+            });
+        });
+    }
+    async ensureLocalDirectory(localPath) {
+        try {
+            await fsMkdir(localPath, { recursive: true });
+        }
+        catch (err) {
+            if (err.code !== 'EEXIST') {
+                throw err;
+            }
+        }
+    }
+    isDirectory(mode) {
+        return (mode & 0o170000) === 0o040000;
+    }
+    joinPosixPath(...segments) {
+        return segments.join('/').replace(/\/+/g, '/');
+    }
+    log(level, message) {
+        if (this.logger) {
+            this.logger[level](`${this.logPrefix} ${message}`);
+        }
+    }
+    extractTitleFromContent(content) {
+        const match = content.match(PROGRAM_PATTERN);
+        if (match) {
+            return `Batch Output for ${match[1].trim()}`;
+        }
+        return undefined;
+    }
+    extractSequenceTitles(content) {
+        const titles = new Map();
+        let match;
+        SEQ_TITLE_PATTERN.lastIndex = 0;
+        while ((match = SEQ_TITLE_PATTERN.exec(content)) !== null) {
+            const sequence = match[1];
+            const title = match[2].trim();
+            if (sequence && title) {
+                titles.set(sequence, title);
+            }
+        }
+        return titles;
+    }
+    async processReportTitles(localReportsPath, downloadedFiles, metadata) {
+        if (!metadata.titles) {
+            metadata.titles = {};
+        }
+        const newSequenceTitles = new Map();
+        for (const fileName of downloadedFiles) {
+            const filePath = path.join(localReportsPath, fileName);
+            try {
+                const content = await fsReadFile(filePath, 'utf8');
+                const programTitle = this.extractTitleFromContent(content);
+                if (programTitle) {
+                    metadata.titles[fileName] = programTitle;
+                    const seqTitles = this.extractSequenceTitles(content);
+                    for (const [seq, title] of seqTitles) {
+                        newSequenceTitles.set(seq, title);
+                    }
+                }
+            }
+            catch (err) {
+                this.log('debug', `Failed to read ${fileName} for title: ${err.message}`);
+            }
+        }
+        for (const [sequence, title] of newSequenceTitles) {
+            if (!metadata.titles[sequence]) {
+                metadata.titles[sequence] = title;
+            }
+        }
+        this.log('debug', `Processed titles: ${Object.keys(metadata.titles).length} total`);
+        return metadata.titles;
+    }
+    async disconnect() {
+        if (this.sftp) {
+            this.sftp = null;
+        }
+        if (this.client) {
+            this.client.end();
+            this.client = null;
+        }
+        this.currentHost = null;
+        this.currentPort = null;
+        this.currentUsername = null;
+    }
+}
+exports.ReportsSyncService = ReportsSyncService;
+let reportsSyncServiceInstance = null;
+const getReportsSyncService = () => {
+    if (!reportsSyncServiceInstance) {
+        reportsSyncServiceInstance = new ReportsSyncService();
+    }
+    return reportsSyncServiceInstance;
+};
+exports.getReportsSyncService = getReportsSyncService;
+const disconnectReportsSyncService = async () => {
+    if (reportsSyncServiceInstance) {
+        await reportsSyncServiceInstance.disconnect();
+        reportsSyncServiceInstance = null;
+    }
+};
+exports.disconnectReportsSyncService = disconnectReportsSyncService;
+//# sourceMappingURL=reports-sync.js.map
+
+/***/ }),
+
+/***/ 54868:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -8077,8 +11657,9 @@ else
     exit 1
   fi
 
-  # Extract the report sequence from the job file (first Seq: value)
-  report_sequence=$(awk '/Seq: [0-9]{6}/ { for (i = 1; i <= NF; i++) if ($i ~ /^Seq:/) { print $(i+1); exit } }' "$job_file")
+  # Extract the report sequence from the job file (the Seq: value on the line matching the title)
+  # Use match() and substr() for efficient pattern extraction instead of iterating through fields
+  report_sequence=$(awk -v title="$title" '/Seq: [0-9]{6}/ && $0 ~ ("Title: " title "$") { match($0, /Seq: [0-9]{6}/); print substr($0, RSTART+5, 6); exit }' "$job_file")
 
   # If no report sequence found, use the job sequence
   if [ -z "$report_sequence" ]; then
@@ -8171,8 +11752,8 @@ while [ "$(date +%s)" -lt "$end_epoch" ]; do
   if [ -n "$files" ]; then
     matched_file=$(echo "$files" | sort | tail -n 1)
 
-    # Use awk to extract numbers after "Seq:"
-    seqs=$(awk '/Seq: [0-9]{6}/ { for (i = 1; i <= NF; i++) if ($i ~ /^Seq:/) print $(i+1) }' "$matched_file")
+    # Use awk with match() and substr() for efficient pattern extraction
+    seqs=$(awk '/Seq: [0-9]{6}/ { match($0, /Seq: [0-9]{6}/); print substr($0, RSTART+5, 6) }' "$matched_file")
 
     filename=$(basename "$matched_file")
 
@@ -8195,7 +11776,7 @@ exit 1
 
 /***/ }),
 
-/***/ 56312:
+/***/ 7371:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -8238,14 +11819,23 @@ exports.disconnectSFTPSyncService = exports.executeSFTPSync = exports.getSFTPSyn
 const ssh2_1 = __nccwpck_require__(41828);
 const fs = __importStar(__nccwpck_require__(79896));
 const path = __importStar(__nccwpck_require__(16928));
+const crypto = __importStar(__nccwpck_require__(76982));
 const util_1 = __nccwpck_require__(39023);
-const paths_1 = __nccwpck_require__(30647);
-const types_1 = __nccwpck_require__(27118);
+const paths_1 = __nccwpck_require__(84576);
+const types_1 = __nccwpck_require__(19233);
+const errors_1 = __nccwpck_require__(68677);
+const ssh_utils_1 = __nccwpck_require__(82334);
+const sync_filters_1 = __nccwpck_require__(25495);
+const line_endings_1 = __nccwpck_require__(74689);
 const fsReaddir = (0, util_1.promisify)(fs.readdir);
 const fsStat = (0, util_1.promisify)(fs.stat);
 const fsMkdir = (0, util_1.promisify)(fs.mkdir);
 const fsUtimes = (0, util_1.promisify)(fs.utimes);
 const DEFAULT_CONCURRENCY = 20;
+const CHECKSUM_BATCH_SIZE = 50;
+function isNotOwnerPermissionFixup(stderr) {
+    return /\bnot owner\b/i.test(stderr);
+}
 class SFTPSyncService {
     client = null;
     sftp = null;
@@ -8254,31 +11844,56 @@ class SFTPSyncService {
     currentUsername = null;
     logger = null;
     logPrefix = '[SFTPSyncService]';
+    ownsClient = true;
     async sync(config, isDryRun = true, logger) {
         this.logger = logger || null;
         const syncMode = config.syncMode || types_1.SymitarSyncMode.MIRROR;
+        const compareMode = config.compareMode || 'quick';
         const isPull = syncMode === types_1.SymitarSyncMode.PULL;
         const concurrency = config.concurrency || DEFAULT_CONCURRENCY;
+        if (config.remoteDirectory === types_1.SymitarSyncDirectory.REPORT &&
+            syncMode !== types_1.SymitarSyncMode.PULL) {
+            throw new Error(`REPORT directory is read-only. Only PULL mode is allowed, but '${syncMode}' was requested. ` +
+                'This restriction exists to prevent accidental modifications to the reports directory.');
+        }
         const result = {
             synced: [],
             deleted: [],
             skipped: [],
+            outliers: [],
             errors: [],
         };
         const remotePath = (0, paths_1.getRemoteDirectoryPath)(config.symNumber, config.remoteDirectory);
         const localPath = config.localDirectory.endsWith('/')
             ? config.localDirectory
             : `${config.localDirectory}/`;
+        const connectPhase = config.existingClient ? 'preparing' : 'connecting';
+        config.onProgress?.({ phase: connectPhase, current: 0, total: 0 });
         try {
-            config.onProgress?.({ phase: 'connecting', current: 0, total: 0 });
             await this.connect(config);
-            if (!this.sftp) {
-                throw new Error('SFTP connection not established');
-            }
+        }
+        catch (err) {
+            const message = err.message || String(err);
+            this.log('error', message);
+            throw err instanceof errors_1.SymitarConnectionError
+                ? err
+                : new errors_1.SymitarConnectionError(`Failed to connect to ${config.host}: ${message}`, config.host, err);
+        }
+        if (!this.sftp) {
+            throw new errors_1.SymitarConnectionError('SFTP connection not established', config.host);
+        }
+        try {
             config.onProgress?.({ phase: 'scanning', current: 0, total: 0 });
-            const remoteFiles = await this.listRemoteFiles(remotePath);
+            const remoteFiles = config.minMtime && isPull
+                ? await this.listRemoteFilesWithFind(remotePath, config.minMtime)
+                : await this.listRemoteFiles(remotePath);
             const localFiles = await this.listLocalFiles(localPath);
-            const { toSync, toDelete } = this.compareFiles(remoteFiles, localFiles, syncMode);
+            const { toSync, toDelete, outliers } = this.compareFiles(remoteFiles, localFiles, syncMode, config.preserveServerFiles, config.pullPreservedOnly);
+            if (compareMode === 'checksum') {
+                const checksumSync = await this.getChecksumChanges(remoteFiles, localFiles, toSync, syncMode, localPath, remotePath, config.preserveServerFiles, config.pullPreservedOnly);
+                toSync.push(...checksumSync);
+            }
+            result.outliers = outliers;
             const syncSet = new Set(toSync.map((f) => f.name));
             const deleteSet = new Set(toDelete);
             const sourceFiles = isPull ? remoteFiles : localFiles;
@@ -8302,7 +11917,7 @@ class SFTPSyncService {
                 const localFilePath = path.join(localPath, file.name);
                 const operation = isPull
                     ? this.downloadFile(remoteFilePath, localFilePath, file.mtime)
-                    : this.uploadFile(localFilePath, remoteFilePath);
+                    : this.uploadFile(localFilePath, remoteFilePath, config.symNumber);
                 return operation
                     .then(() => {
                     result.synced.push(file.name);
@@ -8383,7 +11998,7 @@ class SFTPSyncService {
         };
     }
     async connect(config) {
-        const { host, port = 22, username, password } = config;
+        const { host, port = 22, username, password, existingClient } = config;
         if (this.client &&
             this.sftp &&
             this.currentHost === host &&
@@ -8392,6 +12007,37 @@ class SFTPSyncService {
             return;
         }
         await this.disconnect();
+        if (existingClient) {
+            this.client = existingClient;
+            this.ownsClient = false;
+            const SFTP_CHANNEL_TIMEOUT = 5000;
+            return new Promise((resolve, reject) => {
+                let settled = false;
+                const timeoutId = setTimeout(() => {
+                    if (!settled) {
+                        settled = true;
+                        reject(new errors_1.SymitarConnectionError('Connection timeout - SSH connection may be unavailable'));
+                    }
+                }, SFTP_CHANNEL_TIMEOUT);
+                this.client.sftp((err, sftp) => {
+                    if (settled)
+                        return;
+                    settled = true;
+                    clearTimeout(timeoutId);
+                    if (err) {
+                        reject(new errors_1.SymitarConnectionError(`Failed to get SFTP channel: ${err.message}`));
+                        return;
+                    }
+                    this.sftp = sftp;
+                    this.currentHost = host;
+                    this.currentPort = port;
+                    this.currentUsername = username;
+                    this.log('debug', `Using existing connection to ${host}:${port}`);
+                    resolve();
+                });
+            });
+        }
+        this.ownsClient = true;
         return new Promise((resolve, reject) => {
             this.client = new ssh2_1.Client();
             this.client.on('ready', () => {
@@ -8470,6 +12116,10 @@ class SFTPSyncService {
                         resolve([]);
                         return;
                     }
+                    if (err.code === 3) {
+                        reject(new errors_1.SymitarPermissionError(`Permission denied: ${remotePath}`, remotePath, err instanceof Error ? err : undefined));
+                        return;
+                    }
                     reject(err);
                     return;
                 }
@@ -8488,9 +12138,39 @@ class SFTPSyncService {
             });
         });
     }
+    async listRemoteFilesWithFind(remotePath, minMtime) {
+        if (!this.client) {
+            throw new Error('SSH client not connected');
+        }
+        const findCommand = `find '${remotePath}' -maxdepth 1 -type f -newermt @${minMtime} -printf '%s %T@ %f\\n' 2>/dev/null || true`;
+        this.log('debug', `Executing find command: ${findCommand}`);
+        const result = await (0, ssh_utils_1.execCommand)(this.client, findCommand);
+        if (result.code !== 0 && result.stderr) {
+            this.log('warn', `Find command stderr: ${result.stderr}`);
+        }
+        const files = [];
+        const lines = result.stdout.trim().split('\n').filter(Boolean);
+        for (const line of lines) {
+            const match = line.match(/^(\d+)\s+([\d.]+)\s+(.+)$/);
+            if (match) {
+                const [, sizeStr, mtimeStr, name] = match;
+                files.push({
+                    name,
+                    size: parseInt(sizeStr, 10),
+                    mtime: Math.floor(parseFloat(mtimeStr)),
+                    isDirectory: false,
+                });
+            }
+        }
+        this.log('debug', `Find returned ${files.length} files newer than ${new Date(minMtime * 1000).toISOString()}`);
+        return files;
+    }
     async listLocalFiles(localPath) {
         try {
-            await this.ensureLocalDirectory(localPath);
+            const directoryStats = await fs.promises.stat(localPath);
+            if (!directoryStats.isDirectory()) {
+                throw new Error(`Local path is not a directory: ${localPath}`);
+            }
             const entries = await fsReaddir(localPath);
             const files = [];
             for (const entry of entries) {
@@ -8500,7 +12180,7 @@ class SFTPSyncService {
                     if (stats.isFile()) {
                         files.push({
                             name: entry,
-                            size: stats.size,
+                            size: await (0, line_endings_1.getNormalizedFileSize)(filePath),
                             mtime: Math.floor(stats.mtimeMs / 1000),
                             isDirectory: false,
                         });
@@ -8511,14 +12191,21 @@ class SFTPSyncService {
             }
             return files;
         }
-        catch {
-            return [];
+        catch (err) {
+            if (err?.code === 'ENOENT') {
+                throw new Error(`Local directory does not exist: ${localPath}`);
+            }
+            throw err;
         }
     }
-    compareFiles(remoteFiles, localFiles, syncMode) {
+    compareFiles(remoteFiles, localFiles, syncMode, preserveServerFiles = [], pullPreservedOnly = false) {
         const isPull = syncMode === types_1.SymitarSyncMode.PULL;
         const isMirror = syncMode === types_1.SymitarSyncMode.MIRROR;
-        const sourceFiles = isPull ? remoteFiles : localFiles;
+        const sourceFiles = isPull && pullPreservedOnly
+            ? remoteFiles.filter((file) => (0, sync_filters_1.matchesAnyPattern)(file.name, preserveServerFiles))
+            : isPull
+                ? remoteFiles
+                : localFiles.filter((file) => !(0, sync_filters_1.matchesAnyPattern)(file.name, preserveServerFiles));
         const targetFiles = isPull ? localFiles : remoteFiles;
         const targetMap = new Map();
         for (const file of targetFiles) {
@@ -8539,12 +12226,117 @@ class SFTPSyncService {
         const toDelete = [];
         if (isMirror) {
             for (const targetFile of targetFiles) {
-                if (!sourceSet.has(targetFile.name)) {
+                if (!sourceSet.has(targetFile.name) &&
+                    !(0, sync_filters_1.matchesAnyPattern)(targetFile.name, preserveServerFiles)) {
                     toDelete.push(targetFile.name);
                 }
             }
         }
-        return { toSync, toDelete };
+        const outliers = [];
+        if (isPull && pullPreservedOnly) {
+            const localMap = new Map(localFiles.map((f) => [f.name, f]));
+            for (const remoteFile of remoteFiles) {
+                if ((0, sync_filters_1.matchesAnyPattern)(remoteFile.name, preserveServerFiles))
+                    continue;
+                const localFile = localMap.get(remoteFile.name);
+                if (!localFile || localFile.size !== remoteFile.size) {
+                    outliers.push(remoteFile.name);
+                }
+            }
+        }
+        return { toSync, toDelete, outliers };
+    }
+    async getChecksumChanges(remoteFiles, localFiles, alreadySyncing, syncMode, localPath, remotePath, preserveServerFiles = [], pullPreservedOnly = false) {
+        const isPull = syncMode === types_1.SymitarSyncMode.PULL;
+        const sourceFiles = isPull && pullPreservedOnly
+            ? remoteFiles.filter((file) => (0, sync_filters_1.matchesAnyPattern)(file.name, preserveServerFiles))
+            : isPull
+                ? remoteFiles
+                : localFiles.filter((file) => !(0, sync_filters_1.matchesAnyPattern)(file.name, preserveServerFiles));
+        const targetMap = new Map((isPull ? localFiles : remoteFiles).map((file) => [file.name, file]));
+        const syncing = new Set(alreadySyncing.map((file) => file.name));
+        const checksumChanges = [];
+        const candidates = [];
+        for (const sourceFile of sourceFiles) {
+            if (syncing.has(sourceFile.name) || !targetMap.has(sourceFile.name)) {
+                continue;
+            }
+            candidates.push(sourceFile);
+        }
+        const localHashes = new Map();
+        for (let i = 0; i < candidates.length; i += CHECKSUM_BATCH_SIZE) {
+            const batch = candidates.slice(i, i + CHECKSUM_BATCH_SIZE);
+            await Promise.all(batch.map(async (sourceFile) => {
+                const localFilePath = path.join(localPath, sourceFile.name);
+                localHashes.set(sourceFile.name, await this.hashLocalNormalizedFile(localFilePath));
+            }));
+        }
+        const remoteHashes = await this.hashRemoteFiles(remotePath, candidates.map((file) => file.name));
+        for (const sourceFile of candidates) {
+            const localHash = localHashes.get(sourceFile.name);
+            const remoteHash = remoteHashes.get(sourceFile.name);
+            if (localHash !== remoteHash) {
+                checksumChanges.push(sourceFile);
+                syncing.add(sourceFile.name);
+            }
+        }
+        return checksumChanges;
+    }
+    async hashLocalNormalizedFile(localPath) {
+        const data = await fs.promises.readFile(localPath);
+        return this.hashBuffer((0, line_endings_1.normalizeBufferLineEndings)(data));
+    }
+    async hashRemoteFiles(remotePath, fileNames) {
+        if (!this.client) {
+            throw new Error('SSH client not connected');
+        }
+        const hashes = new Map();
+        for (let i = 0; i < fileNames.length; i += CHECKSUM_BATCH_SIZE) {
+            const batch = fileNames.slice(i, i + CHECKSUM_BATCH_SIZE);
+            if (batch.length === 0)
+                continue;
+            const files = batch
+                .map((name) => (0, ssh_utils_1.escapeShellArg)(this.joinPosixPath(remotePath, name)))
+                .join(' ');
+            const result = await (0, ssh_utils_1.execCommand)(this.client, `shasum -a 256 ${files}`);
+            if (result.code !== 0) {
+                this.log('warn', `Remote checksum batch failed; falling back to SFTP hashing: ${result.stderr.trim() || `exit code ${result.code}`}`);
+            }
+            for (const line of result.stdout.split('\n')) {
+                const match = line.trim().match(/^([a-fA-F0-9]+)\s+(.+)$/);
+                if (!match)
+                    continue;
+                const [, hash, filePath] = match;
+                hashes.set(path.posix.basename(filePath.trim()), hash.toLowerCase());
+            }
+            const missing = batch.filter((name) => !hashes.has(name));
+            if (missing.length > 0) {
+                await Promise.all(missing.map(async (name) => {
+                    const remoteFilePath = this.joinPosixPath(remotePath, name);
+                    const hash = await this.hashRemoteFileViaSftp(remoteFilePath);
+                    if (hash) {
+                        hashes.set(name, hash);
+                    }
+                }));
+            }
+        }
+        return hashes;
+    }
+    async hashRemoteFileViaSftp(remotePath) {
+        if (!this.sftp) {
+            throw new Error('SFTP not connected');
+        }
+        try {
+            const data = await (0, ssh_utils_1.sftpReadFile)(this.sftp, remotePath);
+            return this.hashBuffer(data);
+        }
+        catch (err) {
+            this.log('warn', `Unable to hash ${remotePath} via SFTP fallback: ${err.message || String(err)}`);
+            return '';
+        }
+    }
+    hashBuffer(data) {
+        return crypto.createHash('sha256').update(data).digest('hex');
     }
     async downloadFile(remotePath, localPath, mtime) {
         await this.ensureLocalDirectory(path.dirname(localPath));
@@ -8565,35 +12357,50 @@ class SFTPSyncService {
             });
         });
     }
-    isBinaryBuffer(buffer) {
-        const bytesToCheck = Math.min(buffer.length, 8192);
-        for (let i = 0; i < bytesToCheck; i++) {
-            if (buffer[i] === 0) {
-                return true;
+    async uploadFile(localPath, remotePath, symNumber) {
+        const localStats = await fs.promises.stat(localPath).catch(() => null);
+        const data = await fs.promises.readFile(localPath);
+        const bufferData = (0, line_endings_1.normalizeBufferLineEndings)(data);
+        if (!this.sftp) {
+            throw new Error('SFTP not connected');
+        }
+        await (0, ssh_utils_1.sftpWriteFile)(this.sftp, remotePath, bufferData, { mode: 0o770 });
+        await this.setRemoteMtime(remotePath, localStats?.mtime);
+        const chmodResult = await (0, ssh_utils_1.execCommand)(this.client, `chmod 770 ${(0, ssh_utils_1.escapeShellArg)(remotePath)}`);
+        if (chmodResult.code !== 0) {
+            const stderr = chmodResult.stderr.trim();
+            if (isNotOwnerPermissionFixup(stderr)) {
+                this.log('debug', `chmod skipped for ${remotePath}: deploy user is not the file owner`);
+            }
+            else {
+                this.log('warn', `chmod failed for ${remotePath}: ${stderr}`);
             }
         }
-        return false;
-    }
-    async uploadFile(localPath, remotePath) {
-        return new Promise((resolve, reject) => {
-            if (!this.sftp) {
-                return reject(new Error('SFTP not connected'));
+        if (!this.client) {
+            throw new Error('SSH client not connected');
+        }
+        const symGroup = path.basename((0, paths_1.getSymDirectory)(symNumber));
+        const result = await (0, ssh_utils_1.execCommand)(this.client, `chgrp ${(0, ssh_utils_1.escapeShellArg)(symGroup)} ${(0, ssh_utils_1.escapeShellArg)(remotePath)}`);
+        if (result.code !== 0) {
+            const stderr = result.stderr.trim();
+            if (isNotOwnerPermissionFixup(stderr)) {
+                this.log('debug', `chgrp skipped for ${remotePath}: deploy user is not the file owner`);
             }
-            fs.readFile(localPath, (readErr, data) => {
-                if (readErr) {
-                    return reject(readErr);
+            else {
+                this.log('warn', `chgrp failed for ${remotePath}: ${stderr}`);
+            }
+        }
+    }
+    async setRemoteMtime(remotePath, mtime) {
+        if (!this.sftp || !mtime || typeof this.sftp.utimes !== 'function') {
+            return;
+        }
+        await new Promise((resolve) => {
+            this.sftp.utimes(remotePath, mtime, mtime, (err) => {
+                if (err) {
+                    this.log('debug', `mtime preservation skipped for ${remotePath}: ${err.message || String(err)}`);
                 }
-                let bufferData = data;
-                if (!this.isBinaryBuffer(data)) {
-                    const textData = data.toString('utf8').replace(/\r\n/g, '\n');
-                    bufferData = Buffer.from(textData, 'utf8');
-                }
-                this.sftp.writeFile(remotePath, bufferData, (writeErr) => {
-                    if (writeErr) {
-                        return reject(writeErr);
-                    }
-                    resolve();
-                });
+                resolve();
             });
         });
     }
@@ -8638,12 +12445,15 @@ class SFTPSyncService {
             this.sftp = null;
         }
         if (this.client) {
-            this.client.end();
+            if (this.ownsClient) {
+                this.client.end();
+            }
             this.client = null;
         }
         this.currentHost = null;
         this.currentPort = null;
         this.currentUsername = null;
+        this.ownsClient = true;
     }
 }
 exports.SFTPSyncService = SFTPSyncService;
@@ -8675,13 +12485,15 @@ exports.disconnectSFTPSyncService = disconnectSFTPSyncService;
 
 /***/ }),
 
-/***/ 66933:
+/***/ 82334:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.execCommand = exports.sftpUnlink = exports.sftpFastGet = exports.sftpReadFile = exports.sftpWriteFile = exports.getSftp = void 0;
+exports.execCommand = exports.sftpUnlink = exports.sftpFastGet = exports.sftpReadFile = exports.sftpWriteFile = exports.getSftp = exports.escapeShellArg = void 0;
+const escapeShellArg = (str) => `'${str.replace(/'/g, "'\\''")}'`;
+exports.escapeShellArg = escapeShellArg;
 const getSftp = (client) => {
     return new Promise((resolve, reject) => {
         client.sftp((err, sftp) => {
@@ -8693,9 +12505,9 @@ const getSftp = (client) => {
     });
 };
 exports.getSftp = getSftp;
-const sftpWriteFile = (sftp, remotePath, data) => {
+const sftpWriteFile = (sftp, remotePath, data, options) => {
     return new Promise((resolve, reject) => {
-        sftp.writeFile(remotePath, data, (err) => {
+        sftp.writeFile(remotePath, data, options || {}, (err) => {
             if (err)
                 reject(err);
             else
@@ -8761,7 +12573,53 @@ exports.execCommand = execCommand;
 
 /***/ }),
 
-/***/ 76453:
+/***/ 25495:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.matchesAnyPattern = matchesAnyPattern;
+exports.filterChangedFilesForPreserve = filterChangedFilesForPreserve;
+const types_1 = __nccwpck_require__(19233);
+function escapeRegExp(value) {
+    return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+function patternToRegExp(pattern) {
+    const source = pattern
+        .split('*')
+        .map((part) => part.split('?').map(escapeRegExp).join('.'))
+        .join('.*');
+    return new RegExp(`^${source}$`, 'i');
+}
+function matchesAnyPattern(fileName, patterns) {
+    return patterns.some((pattern) => patternToRegExp(pattern).test(fileName));
+}
+function filterChangedFilesForPreserve(changedFiles, syncMode, options = {}) {
+    const preserveServerFiles = options.preserveServerFiles || [];
+    const shouldPullPreservedOnly = syncMode === types_1.SymitarSyncMode.PULL && options.pullPreservedOnly === true;
+    if (shouldPullPreservedOnly) {
+        if (preserveServerFiles.length === 0) {
+            return { deployed: [], deleted: [] };
+        }
+        return {
+            deployed: changedFiles.deployed.filter((file) => matchesAnyPattern(file, preserveServerFiles)),
+            deleted: [],
+        };
+    }
+    if (preserveServerFiles.length === 0 || syncMode === types_1.SymitarSyncMode.PULL) {
+        return changedFiles;
+    }
+    return {
+        deployed: changedFiles.deployed.filter((file) => !matchesAnyPattern(file, preserveServerFiles)),
+        deleted: changedFiles.deleted.filter((file) => !matchesAnyPattern(file, preserveServerFiles)),
+    };
+}
+//# sourceMappingURL=sync-filters.js.map
+
+/***/ }),
+
+/***/ 75110:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -8769,12 +12627,16 @@ exports.execCommand = execCommand;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getFilesToValidate = getFilesToValidate;
 exports.formatValidationErrors = formatValidationErrors;
+exports.formatValidationError = formatValidationError;
+exports.formatNamedFileList = formatNamedFileList;
+exports.formatSyncPlan = formatSyncPlan;
 exports.validatePowerOnFiles = validatePowerOnFiles;
 exports.installDeployedPowerOns = installDeployedPowerOns;
 exports.uninstallDeletedPowerOns = uninstallDeletedPowerOns;
 exports.orchestrateSync = orchestrateSync;
-const types_1 = __nccwpck_require__(27118);
-const poweron_detection_1 = __nccwpck_require__(62593);
+const types_1 = __nccwpck_require__(19233);
+const poweron_detection_1 = __nccwpck_require__(80974);
+const sync_filters_1 = __nccwpck_require__(25495);
 async function getFilesToValidate(deployed, deleted, localDirectory, validateIgnoreList, logger, logPrefix) {
     const candidateFiles = deployed
         .filter((file) => !deleted.includes(file))
@@ -8807,16 +12669,53 @@ function formatValidationErrors(invalidPowerOns, logPrefix) {
             .join('\n'))
         .join('\n');
 }
-async function validatePowerOnFiles(filesToValidate, localDirectory, validateFn, logger, logPrefix) {
+function formatValidationError(invalidPowerOn, logPrefix) {
+    return formatValidationErrors([invalidPowerOn], logPrefix);
+}
+function formatNamedFileList(title, files, logPrefix) {
+    if (files.length === 0) {
+        return `${logPrefix}   ${title} 0`;
+    }
+    return [
+        `${logPrefix}   ${title} ${files.length}:`,
+        ...files.map((file) => `${logPrefix}     - ${file}`),
+    ].join('\n');
+}
+function formatSyncPlan(deployed, deleted, installed, uninstalled, logPrefix) {
+    const sections = [
+        `${logPrefix} Synchronization results:`,
+        formatNamedFileList('Deployed', deployed, logPrefix),
+    ];
+    if (deleted.length > 0) {
+        sections.push(formatNamedFileList('Deleted', deleted, logPrefix));
+    }
+    if (installed.length > 0) {
+        sections.push(formatNamedFileList('Installed', installed, logPrefix));
+    }
+    if (uninstalled.length > 0) {
+        sections.push(formatNamedFileList('Uninstalled', uninstalled, logPrefix));
+    }
+    return sections.join('\n');
+}
+async function validatePowerOnFiles(filesToValidate, localDirectory, validateFn, logger, logPrefix, onProgress) {
     const invalidPowerOns = [];
-    for (const poweron of filesToValidate) {
+    const totalFiles = filesToValidate.length;
+    for (const [index, poweron] of filesToValidate.entries()) {
+        onProgress?.({
+            phase: 'validating',
+            current: index + 1,
+            total: totalFiles,
+            currentFile: poweron,
+        });
         try {
             const result = await validateFn(`${localDirectory}/${poweron}`);
             if (!result.isValid) {
-                invalidPowerOns.push({
+                const invalidPowerOn = {
                     name: poweron,
                     errors: result.errors,
-                });
+                };
+                invalidPowerOns.push(invalidPowerOn);
+                logger.error(`${logPrefix} Invalid PowerOn file detected:\n${formatValidationError(invalidPowerOn, logPrefix)}`);
             }
         }
         catch (error) {
@@ -8825,6 +12724,9 @@ async function validatePowerOnFiles(filesToValidate, localDirectory, validateFn,
         }
     }
     return invalidPowerOns;
+}
+function getInstallCandidates(deployed, installList) {
+    return deployed.filter((file) => installList.includes(file));
 }
 async function installDeployedPowerOns(deployed, installList, localDirectory, installFn, isDryRun, logger, logPrefix) {
     const installed = [];
@@ -8883,14 +12785,20 @@ async function orchestrateSync(config, operations) {
         options.powerOn?.installList &&
         options.powerOn.installList.length > 0;
     logger.debug(`${logPrefix} Starting ${syncMode} sync of ${remoteDirectory}${isDryRun ? ' (dry run)' : ''}`);
-    const changedFiles = await operations.getChangedFiles();
+    const rawChangedFiles = await operations.getChangedFiles();
+    const changedFiles = (0, sync_filters_1.filterChangedFilesForPreserve)(rawChangedFiles, syncMode, options);
     const { deleted, deployed } = changedFiles;
+    const installList = options.powerOn?.installList || [];
+    const installCandidates = getInstallCandidates(deployed, installList);
+    const uninstallCandidates = deleted.filter((file) => installList.includes(file));
+    logger.info(formatSyncPlan(deployed, deleted, installCandidates, uninstallCandidates, logPrefix));
     if (deleted.length === 0 && deployed.length === 0) {
         logger.debug(`${logPrefix} No changes detected. Nothing to sync.`);
         return {
             synced: [],
             deleted: [],
             skipped: [],
+            outliers: [],
             errors: [],
             installed: [],
             uninstalled: [],
@@ -8901,10 +12809,10 @@ async function orchestrateSync(config, operations) {
         const validateIgnoreList = options.powerOn?.validateIgnoreList || [];
         const filesToValidate = await getFilesToValidate(deployed, deleted, localDirectory, validateIgnoreList, logger, logPrefix);
         if (filesToValidate.length > 0) {
-            const invalidPowerOns = await validatePowerOnFiles(filesToValidate, localDirectory, operations.validatePowerOn, logger, logPrefix);
+            const invalidPowerOns = await validatePowerOnFiles(filesToValidate, localDirectory, operations.validatePowerOn, logger, logPrefix, options.onProgress);
             if (invalidPowerOns.length > 0) {
-                const details = formatValidationErrors(invalidPowerOns, logPrefix);
-                logger.error(`${logPrefix} Invalid PowerOn files detected:\n${details}`);
+                const invalidNames = invalidPowerOns.map((powerOn) => powerOn.name);
+                logger.error(`${logPrefix} Invalid PowerOn files detected: ${invalidPowerOns.length} file(s) failed validation: ${invalidNames.join(', ')}`);
                 throw new Error(`Invalid PowerOn files detected. Please fix the errors before syncing.`);
             }
         }
@@ -8946,7 +12854,7 @@ async function orchestrateSync(config, operations) {
 
 /***/ }),
 
-/***/ 27118:
+/***/ 19233:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -8970,6 +12878,7 @@ var SymitarCLILogin;
     SymitarCLILogin["UNABLE_TO_DEDICATE_CONSOLE"] = "Dedicate Console :";
     SymitarCLILogin["USER_ID"] = "UserId :";
     SymitarCLILogin["USER_RECORD_IN_USE"] = "User Record in use";
+    SymitarCLILogin["ALL_SESSIONS_IN_USE"] = "All Sessions for this Console are In Use";
 })(SymitarCLILogin || (exports.SymitarCLILogin = SymitarCLILogin = {}));
 var SymitarSyncDirectory;
 (function (SymitarSyncDirectory) {
@@ -8977,6 +12886,7 @@ var SymitarSyncDirectory;
     SymitarSyncDirectory["DATAFILES"] = "DATAFILES";
     SymitarSyncDirectory["HELPFILES"] = "HELPFILES";
     SymitarSyncDirectory["LETTERSPECS"] = "LETTERSPECS";
+    SymitarSyncDirectory["REPORT"] = "REPORT";
 })(SymitarSyncDirectory || (exports.SymitarSyncDirectory = SymitarSyncDirectory = {}));
 var SymitarSyncMode;
 (function (SymitarSyncMode) {
@@ -11142,6 +15052,241 @@ function colorspace(namespace, delimiter) {
 
 module.exports = colorspace;
 
+
+/***/ }),
+
+/***/ 52041:
+/***/ (function(module, __unused_webpack_exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+const events_1 = __nccwpck_require__(24434);
+const debug_1 = __importDefault(__nccwpck_require__(18263));
+const promisify_1 = __importDefault(__nccwpck_require__(57345));
+const debug = debug_1.default('agent-base');
+function isAgent(v) {
+    return Boolean(v) && typeof v.addRequest === 'function';
+}
+function isSecureEndpoint() {
+    const { stack } = new Error();
+    if (typeof stack !== 'string')
+        return false;
+    return stack.split('\n').some(l => l.indexOf('(https.js:') !== -1 || l.indexOf('node:https:') !== -1);
+}
+function createAgent(callback, opts) {
+    return new createAgent.Agent(callback, opts);
+}
+(function (createAgent) {
+    /**
+     * Base `http.Agent` implementation.
+     * No pooling/keep-alive is implemented by default.
+     *
+     * @param {Function} callback
+     * @api public
+     */
+    class Agent extends events_1.EventEmitter {
+        constructor(callback, _opts) {
+            super();
+            let opts = _opts;
+            if (typeof callback === 'function') {
+                this.callback = callback;
+            }
+            else if (callback) {
+                opts = callback;
+            }
+            // Timeout for the socket to be returned from the callback
+            this.timeout = null;
+            if (opts && typeof opts.timeout === 'number') {
+                this.timeout = opts.timeout;
+            }
+            // These aren't actually used by `agent-base`, but are required
+            // for the TypeScript definition files in `@types/node` :/
+            this.maxFreeSockets = 1;
+            this.maxSockets = 1;
+            this.maxTotalSockets = Infinity;
+            this.sockets = {};
+            this.freeSockets = {};
+            this.requests = {};
+            this.options = {};
+        }
+        get defaultPort() {
+            if (typeof this.explicitDefaultPort === 'number') {
+                return this.explicitDefaultPort;
+            }
+            return isSecureEndpoint() ? 443 : 80;
+        }
+        set defaultPort(v) {
+            this.explicitDefaultPort = v;
+        }
+        get protocol() {
+            if (typeof this.explicitProtocol === 'string') {
+                return this.explicitProtocol;
+            }
+            return isSecureEndpoint() ? 'https:' : 'http:';
+        }
+        set protocol(v) {
+            this.explicitProtocol = v;
+        }
+        callback(req, opts, fn) {
+            throw new Error('"agent-base" has no default implementation, you must subclass and override `callback()`');
+        }
+        /**
+         * Called by node-core's "_http_client.js" module when creating
+         * a new HTTP request with this Agent instance.
+         *
+         * @api public
+         */
+        addRequest(req, _opts) {
+            const opts = Object.assign({}, _opts);
+            if (typeof opts.secureEndpoint !== 'boolean') {
+                opts.secureEndpoint = isSecureEndpoint();
+            }
+            if (opts.host == null) {
+                opts.host = 'localhost';
+            }
+            if (opts.port == null) {
+                opts.port = opts.secureEndpoint ? 443 : 80;
+            }
+            if (opts.protocol == null) {
+                opts.protocol = opts.secureEndpoint ? 'https:' : 'http:';
+            }
+            if (opts.host && opts.path) {
+                // If both a `host` and `path` are specified then it's most
+                // likely the result of a `url.parse()` call... we need to
+                // remove the `path` portion so that `net.connect()` doesn't
+                // attempt to open that as a unix socket file.
+                delete opts.path;
+            }
+            delete opts.agent;
+            delete opts.hostname;
+            delete opts._defaultAgent;
+            delete opts.defaultPort;
+            delete opts.createConnection;
+            // Hint to use "Connection: close"
+            // XXX: non-documented `http` module API :(
+            req._last = true;
+            req.shouldKeepAlive = false;
+            let timedOut = false;
+            let timeoutId = null;
+            const timeoutMs = opts.timeout || this.timeout;
+            const onerror = (err) => {
+                if (req._hadError)
+                    return;
+                req.emit('error', err);
+                // For Safety. Some additional errors might fire later on
+                // and we need to make sure we don't double-fire the error event.
+                req._hadError = true;
+            };
+            const ontimeout = () => {
+                timeoutId = null;
+                timedOut = true;
+                const err = new Error(`A "socket" was not created for HTTP request before ${timeoutMs}ms`);
+                err.code = 'ETIMEOUT';
+                onerror(err);
+            };
+            const callbackError = (err) => {
+                if (timedOut)
+                    return;
+                if (timeoutId !== null) {
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
+                }
+                onerror(err);
+            };
+            const onsocket = (socket) => {
+                if (timedOut)
+                    return;
+                if (timeoutId != null) {
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
+                }
+                if (isAgent(socket)) {
+                    // `socket` is actually an `http.Agent` instance, so
+                    // relinquish responsibility for this `req` to the Agent
+                    // from here on
+                    debug('Callback returned another Agent instance %o', socket.constructor.name);
+                    socket.addRequest(req, opts);
+                    return;
+                }
+                if (socket) {
+                    socket.once('free', () => {
+                        this.freeSocket(socket, opts);
+                    });
+                    req.onSocket(socket);
+                    return;
+                }
+                const err = new Error(`no Duplex stream was returned to agent-base for \`${req.method} ${req.path}\``);
+                onerror(err);
+            };
+            if (typeof this.callback !== 'function') {
+                onerror(new Error('`callback` is not defined'));
+                return;
+            }
+            if (!this.promisifiedCallback) {
+                if (this.callback.length >= 3) {
+                    debug('Converting legacy callback function to promise');
+                    this.promisifiedCallback = promisify_1.default(this.callback);
+                }
+                else {
+                    this.promisifiedCallback = this.callback;
+                }
+            }
+            if (typeof timeoutMs === 'number' && timeoutMs > 0) {
+                timeoutId = setTimeout(ontimeout, timeoutMs);
+            }
+            if ('port' in opts && typeof opts.port !== 'number') {
+                opts.port = Number(opts.port);
+            }
+            try {
+                debug('Resolving socket for %o request: %o', opts.protocol, `${req.method} ${req.path}`);
+                Promise.resolve(this.promisifiedCallback(req, opts)).then(onsocket, callbackError);
+            }
+            catch (err) {
+                Promise.reject(err).catch(callbackError);
+            }
+        }
+        freeSocket(socket, opts) {
+            debug('Freeing socket %o %o', socket.constructor.name, opts);
+            socket.destroy();
+        }
+        destroy() {
+            debug('Destroying agent %o', this.constructor.name);
+        }
+    }
+    createAgent.Agent = Agent;
+    // So that `instanceof` works correctly
+    createAgent.prototype = createAgent.Agent.prototype;
+})(createAgent || (createAgent = {}));
+module.exports = createAgent;
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ 57345:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+function promisify(fn) {
+    return function (req, opts) {
+        return new Promise((resolve, reject) => {
+            fn.call(this, req, opts, (err, rtn) => {
+                if (err) {
+                    reject(err);
+                }
+                else {
+                    resolve(rtn);
+                }
+            });
+        });
+    };
+}
+exports["default"] = promisify;
+//# sourceMappingURL=promisify.js.map
 
 /***/ }),
 
@@ -15643,7 +19788,7 @@ var GetIntrinsic = __nccwpck_require__(14529);
 var $defineProperty = GetIntrinsic('%Object.defineProperty%', true);
 
 var hasToStringTag = __nccwpck_require__(60944)();
-var hasOwn = __nccwpck_require__(44403);
+var hasOwn = __nccwpck_require__(51996);
 var $TypeError = __nccwpck_require__(67901);
 
 var toStringTag = hasToStringTag ? Symbol.toStringTag : null;
@@ -16149,7 +20294,7 @@ module.exports = function name(fn) {
 
 /***/ }),
 
-/***/ 58155:
+/***/ 98438:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 var debug;
@@ -16171,7 +20316,7 @@ module.exports = function () {
 
 /***/ }),
 
-/***/ 46676:
+/***/ 33881:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 var url = __nccwpck_require__(87016);
@@ -16180,7 +20325,7 @@ var http = __nccwpck_require__(58611);
 var https = __nccwpck_require__(65692);
 var Writable = (__nccwpck_require__(2203).Writable);
 var assert = __nccwpck_require__(42613);
-var debug = __nccwpck_require__(58155);
+var debug = __nccwpck_require__(98438);
 
 // Preventive platform detection
 // istanbul ignore next
@@ -16201,6 +20346,13 @@ try {
 catch (error) {
   useNativeURL = error.code === "ERR_INVALID_URL";
 }
+
+// HTTP headers to drop across HTTP/HTTPS and domain boundaries
+var sensitiveHeaders = [
+  "Authorization",
+  "Proxy-Authorization",
+  "Cookie",
+];
 
 // URL fields to preserve in copy operations
 var preservedUrlFields = [
@@ -16282,6 +20434,11 @@ function RedirectableRequest(options, responseCallback) {
         cause : new RedirectionError({ cause: cause }));
     }
   };
+
+  // Create filter for sensitive HTTP headers
+  this._headerFilter = new RegExp("^(?:" +
+      sensitiveHeaders.concat(options.sensitiveHeaders).map(escapeRegex).join("|") +
+    ")$", "i");
 
   // Perform the first request
   this._performRequest();
@@ -16466,6 +20623,9 @@ RedirectableRequest.prototype._sanitizeOptions = function (options) {
   if (!options.headers) {
     options.headers = {};
   }
+  if (!isArray(options.sensitiveHeaders)) {
+    options.sensitiveHeaders = [];
+  }
 
   // Since http.request treats host as an alias of hostname,
   // but the url module interprets host as hostname plus port,
@@ -16648,7 +20808,7 @@ RedirectableRequest.prototype._processResponse = function (response) {
      redirectUrl.protocol !== "https:" ||
      redirectUrl.host !== currentHost &&
      !isSubdomain(redirectUrl.host, currentHost)) {
-    removeMatchingHeaders(/^(?:(?:proxy-)?authorization|cookie)$/i, this._options.headers);
+    removeMatchingHeaders(this._headerFilter, this._options.headers);
   }
 
   // Evaluate the beforeRedirect callback
@@ -16841,6 +21001,10 @@ function isSubdomain(subdomain, domain) {
   return dot > 0 && subdomain[dot] === "." && subdomain.endsWith(domain);
 }
 
+function isArray(value) {
+  return value instanceof Array;
+}
+
 function isString(value) {
   return typeof value === "string" || value instanceof String;
 }
@@ -16855,6 +21019,10 @@ function isBuffer(value) {
 
 function isURL(value) {
   return URL && value instanceof URL;
+}
+
+function escapeRegex(regex) {
+  return regex.replace(/[\]\\/()*+?.$]/g, "\\$&");
 }
 
 // Exports
@@ -16882,7 +21050,7 @@ var crypto = __nccwpck_require__(76982);
 var mime = __nccwpck_require__(32922);
 var asynckit = __nccwpck_require__(9591);
 var setToStringTag = __nccwpck_require__(68310);
-var hasOwn = __nccwpck_require__(44403);
+var hasOwn = __nccwpck_require__(51996);
 var populate = __nccwpck_require__(89512);
 
 /**
@@ -17736,7 +21904,7 @@ var LEGACY_ALIASES = {
 };
 
 var bind = __nccwpck_require__(38833);
-var hasOwn = __nccwpck_require__(44403);
+var hasOwn = __nccwpck_require__(51996);
 var $concat = bind.call($call, Array.prototype.concat);
 var $spliceApply = bind.call($apply, Array.prototype.splice);
 var $replace = bind.call($call, String.prototype.replace);
@@ -18078,7 +22246,7 @@ module.exports = function hasToStringTagShams() {
 
 /***/ }),
 
-/***/ 44403:
+/***/ 51996:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -18091,6 +22259,284 @@ var bind = __nccwpck_require__(38833);
 /** @type {import('.')} */
 module.exports = bind.call(call, $hasOwn);
 
+
+/***/ }),
+
+/***/ 55741:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const net_1 = __importDefault(__nccwpck_require__(69278));
+const tls_1 = __importDefault(__nccwpck_require__(64756));
+const url_1 = __importDefault(__nccwpck_require__(87016));
+const assert_1 = __importDefault(__nccwpck_require__(42613));
+const debug_1 = __importDefault(__nccwpck_require__(18263));
+const agent_base_1 = __nccwpck_require__(52041);
+const parse_proxy_response_1 = __importDefault(__nccwpck_require__(42184));
+const debug = debug_1.default('https-proxy-agent:agent');
+/**
+ * The `HttpsProxyAgent` implements an HTTP Agent subclass that connects to
+ * the specified "HTTP(s) proxy server" in order to proxy HTTPS requests.
+ *
+ * Outgoing HTTP requests are first tunneled through the proxy server using the
+ * `CONNECT` HTTP request method to establish a connection to the proxy server,
+ * and then the proxy server connects to the destination target and issues the
+ * HTTP request from the proxy server.
+ *
+ * `https:` requests have their socket connection upgraded to TLS once
+ * the connection to the proxy server has been established.
+ *
+ * @api public
+ */
+class HttpsProxyAgent extends agent_base_1.Agent {
+    constructor(_opts) {
+        let opts;
+        if (typeof _opts === 'string') {
+            opts = url_1.default.parse(_opts);
+        }
+        else {
+            opts = _opts;
+        }
+        if (!opts) {
+            throw new Error('an HTTP(S) proxy server `host` and `port` must be specified!');
+        }
+        debug('creating new HttpsProxyAgent instance: %o', opts);
+        super(opts);
+        const proxy = Object.assign({}, opts);
+        // If `true`, then connect to the proxy server over TLS.
+        // Defaults to `false`.
+        this.secureProxy = opts.secureProxy || isHTTPS(proxy.protocol);
+        // Prefer `hostname` over `host`, and set the `port` if needed.
+        proxy.host = proxy.hostname || proxy.host;
+        if (typeof proxy.port === 'string') {
+            proxy.port = parseInt(proxy.port, 10);
+        }
+        if (!proxy.port && proxy.host) {
+            proxy.port = this.secureProxy ? 443 : 80;
+        }
+        // ALPN is supported by Node.js >= v5.
+        // attempt to negotiate http/1.1 for proxy servers that support http/2
+        if (this.secureProxy && !('ALPNProtocols' in proxy)) {
+            proxy.ALPNProtocols = ['http 1.1'];
+        }
+        if (proxy.host && proxy.path) {
+            // If both a `host` and `path` are specified then it's most likely
+            // the result of a `url.parse()` call... we need to remove the
+            // `path` portion so that `net.connect()` doesn't attempt to open
+            // that as a Unix socket file.
+            delete proxy.path;
+            delete proxy.pathname;
+        }
+        this.proxy = proxy;
+    }
+    /**
+     * Called when the node-core HTTP client library is creating a
+     * new HTTP request.
+     *
+     * @api protected
+     */
+    callback(req, opts) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const { proxy, secureProxy } = this;
+            // Create a socket connection to the proxy server.
+            let socket;
+            if (secureProxy) {
+                debug('Creating `tls.Socket`: %o', proxy);
+                socket = tls_1.default.connect(proxy);
+            }
+            else {
+                debug('Creating `net.Socket`: %o', proxy);
+                socket = net_1.default.connect(proxy);
+            }
+            const headers = Object.assign({}, proxy.headers);
+            const hostname = `${opts.host}:${opts.port}`;
+            let payload = `CONNECT ${hostname} HTTP/1.1\r\n`;
+            // Inject the `Proxy-Authorization` header if necessary.
+            if (proxy.auth) {
+                headers['Proxy-Authorization'] = `Basic ${Buffer.from(proxy.auth).toString('base64')}`;
+            }
+            // The `Host` header should only include the port
+            // number when it is not the default port.
+            let { host, port, secureEndpoint } = opts;
+            if (!isDefaultPort(port, secureEndpoint)) {
+                host += `:${port}`;
+            }
+            headers.Host = host;
+            headers.Connection = 'close';
+            for (const name of Object.keys(headers)) {
+                payload += `${name}: ${headers[name]}\r\n`;
+            }
+            const proxyResponsePromise = parse_proxy_response_1.default(socket);
+            socket.write(`${payload}\r\n`);
+            const { statusCode, buffered } = yield proxyResponsePromise;
+            if (statusCode === 200) {
+                req.once('socket', resume);
+                if (opts.secureEndpoint) {
+                    // The proxy is connecting to a TLS server, so upgrade
+                    // this socket connection to a TLS connection.
+                    debug('Upgrading socket connection to TLS');
+                    const servername = opts.servername || opts.host;
+                    return tls_1.default.connect(Object.assign(Object.assign({}, omit(opts, 'host', 'hostname', 'path', 'port')), { socket,
+                        servername }));
+                }
+                return socket;
+            }
+            // Some other status code that's not 200... need to re-play the HTTP
+            // header "data" events onto the socket once the HTTP machinery is
+            // attached so that the node core `http` can parse and handle the
+            // error status code.
+            // Close the original socket, and a new "fake" socket is returned
+            // instead, so that the proxy doesn't get the HTTP request
+            // written to it (which may contain `Authorization` headers or other
+            // sensitive data).
+            //
+            // See: https://hackerone.com/reports/541502
+            socket.destroy();
+            const fakeSocket = new net_1.default.Socket({ writable: false });
+            fakeSocket.readable = true;
+            // Need to wait for the "socket" event to re-play the "data" events.
+            req.once('socket', (s) => {
+                debug('replaying proxy buffer for failed request');
+                assert_1.default(s.listenerCount('data') > 0);
+                // Replay the "buffered" Buffer onto the fake `socket`, since at
+                // this point the HTTP module machinery has been hooked up for
+                // the user.
+                s.push(buffered);
+                s.push(null);
+            });
+            return fakeSocket;
+        });
+    }
+}
+exports["default"] = HttpsProxyAgent;
+function resume(socket) {
+    socket.resume();
+}
+function isDefaultPort(port, secure) {
+    return Boolean((!secure && port === 80) || (secure && port === 443));
+}
+function isHTTPS(protocol) {
+    return typeof protocol === 'string' ? /^https:?$/i.test(protocol) : false;
+}
+function omit(obj, ...keys) {
+    const ret = {};
+    let key;
+    for (key in obj) {
+        if (!keys.includes(key)) {
+            ret[key] = obj[key];
+        }
+    }
+    return ret;
+}
+//# sourceMappingURL=agent.js.map
+
+/***/ }),
+
+/***/ 22540:
+/***/ (function(module, __unused_webpack_exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+const agent_1 = __importDefault(__nccwpck_require__(55741));
+function createHttpsProxyAgent(opts) {
+    return new agent_1.default(opts);
+}
+(function (createHttpsProxyAgent) {
+    createHttpsProxyAgent.HttpsProxyAgent = agent_1.default;
+    createHttpsProxyAgent.prototype = agent_1.default.prototype;
+})(createHttpsProxyAgent || (createHttpsProxyAgent = {}));
+module.exports = createHttpsProxyAgent;
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ 42184:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const debug_1 = __importDefault(__nccwpck_require__(18263));
+const debug = debug_1.default('https-proxy-agent:parse-proxy-response');
+function parseProxyResponse(socket) {
+    return new Promise((resolve, reject) => {
+        // we need to buffer any HTTP traffic that happens with the proxy before we get
+        // the CONNECT response, so that if the response is anything other than an "200"
+        // response code, then we can re-play the "data" events on the socket once the
+        // HTTP parser is hooked up...
+        let buffersLength = 0;
+        const buffers = [];
+        function read() {
+            const b = socket.read();
+            if (b)
+                ondata(b);
+            else
+                socket.once('readable', read);
+        }
+        function cleanup() {
+            socket.removeListener('end', onend);
+            socket.removeListener('error', onerror);
+            socket.removeListener('close', onclose);
+            socket.removeListener('readable', read);
+        }
+        function onclose(err) {
+            debug('onclose had error %o', err);
+        }
+        function onend() {
+            debug('onend');
+        }
+        function onerror(err) {
+            cleanup();
+            debug('onerror %o', err);
+            reject(err);
+        }
+        function ondata(b) {
+            buffers.push(b);
+            buffersLength += b.length;
+            const buffered = Buffer.concat(buffers, buffersLength);
+            const endOfHeaders = buffered.indexOf('\r\n\r\n');
+            if (endOfHeaders === -1) {
+                // keep buffering
+                debug('have not received end of HTTP headers yet...');
+                read();
+                return;
+            }
+            const firstLine = buffered.toString('ascii', 0, buffered.indexOf('\r\n'));
+            const statusCode = +firstLine.split(' ')[1];
+            debug('got proxy server response: %o', firstLine);
+            resolve({
+                statusCode,
+                buffered
+            });
+        }
+        socket.on('error', onerror);
+        socket.on('close', onclose);
+        socket.on('end', onend);
+        read();
+    });
+}
+exports["default"] = parseProxyResponse;
+//# sourceMappingURL=parse-proxy-response.js.map
 
 /***/ }),
 
@@ -19929,122 +24375,6 @@ module.exports = function one(fn) {
   onetime.displayName = name(fn);
   return onetime;
 };
-
-
-/***/ }),
-
-/***/ 25331:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-var parseUrl = (__nccwpck_require__(87016).parse);
-
-var DEFAULT_PORTS = {
-  ftp: 21,
-  gopher: 70,
-  http: 80,
-  https: 443,
-  ws: 80,
-  wss: 443,
-};
-
-var stringEndsWith = String.prototype.endsWith || function(s) {
-  return s.length <= this.length &&
-    this.indexOf(s, this.length - s.length) !== -1;
-};
-
-/**
- * @param {string|object} url - The URL, or the result from url.parse.
- * @return {string} The URL of the proxy that should handle the request to the
- *  given URL. If no proxy is set, this will be an empty string.
- */
-function getProxyForUrl(url) {
-  var parsedUrl = typeof url === 'string' ? parseUrl(url) : url || {};
-  var proto = parsedUrl.protocol;
-  var hostname = parsedUrl.host;
-  var port = parsedUrl.port;
-  if (typeof hostname !== 'string' || !hostname || typeof proto !== 'string') {
-    return '';  // Don't proxy URLs without a valid scheme or host.
-  }
-
-  proto = proto.split(':', 1)[0];
-  // Stripping ports in this way instead of using parsedUrl.hostname to make
-  // sure that the brackets around IPv6 addresses are kept.
-  hostname = hostname.replace(/:\d*$/, '');
-  port = parseInt(port) || DEFAULT_PORTS[proto] || 0;
-  if (!shouldProxy(hostname, port)) {
-    return '';  // Don't proxy URLs that match NO_PROXY.
-  }
-
-  var proxy =
-    getEnv('npm_config_' + proto + '_proxy') ||
-    getEnv(proto + '_proxy') ||
-    getEnv('npm_config_proxy') ||
-    getEnv('all_proxy');
-  if (proxy && proxy.indexOf('://') === -1) {
-    // Missing scheme in proxy, default to the requested URL's scheme.
-    proxy = proto + '://' + proxy;
-  }
-  return proxy;
-}
-
-/**
- * Determines whether a given URL should be proxied.
- *
- * @param {string} hostname - The host name of the URL.
- * @param {number} port - The effective port of the URL.
- * @returns {boolean} Whether the given URL should be proxied.
- * @private
- */
-function shouldProxy(hostname, port) {
-  var NO_PROXY =
-    (getEnv('npm_config_no_proxy') || getEnv('no_proxy')).toLowerCase();
-  if (!NO_PROXY) {
-    return true;  // Always proxy if NO_PROXY is not set.
-  }
-  if (NO_PROXY === '*') {
-    return false;  // Never proxy if wildcard is set.
-  }
-
-  return NO_PROXY.split(/[,\s]/).every(function(proxy) {
-    if (!proxy) {
-      return true;  // Skip zero-length hosts.
-    }
-    var parsedProxy = proxy.match(/^(.+):(\d+)$/);
-    var parsedProxyHostname = parsedProxy ? parsedProxy[1] : proxy;
-    var parsedProxyPort = parsedProxy ? parseInt(parsedProxy[2]) : 0;
-    if (parsedProxyPort && parsedProxyPort !== port) {
-      return true;  // Skip if ports don't match.
-    }
-
-    if (!/^[.*]/.test(parsedProxyHostname)) {
-      // No wildcards, so stop proxying if there is an exact match.
-      return hostname !== parsedProxyHostname;
-    }
-
-    if (parsedProxyHostname.charAt(0) === '*') {
-      // Remove leading wildcard.
-      parsedProxyHostname = parsedProxyHostname.slice(1);
-    }
-    // Stop proxying if the hostname ends with the no_proxy host.
-    return !stringEndsWith.call(hostname, parsedProxyHostname);
-  });
-}
-
-/**
- * Get the value for an environment variable.
- *
- * @param {string} key - The name of the environment variable.
- * @return {string} The value of the environment variable.
- * @private
- */
-function getEnv(key) {
-  return process.env[key.toLowerCase()] || process.env[key.toUpperCase()] || '';
-}
-
-exports.getProxyForUrl = getProxyForUrl;
 
 
 /***/ }),
@@ -78613,7 +82943,7 @@ TransportStream.prototype._nop = function _nop() {
 
 /***/ }),
 
-/***/ 68360:
+/***/ 45530:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -78627,23 +82957,23 @@ TransportStream.prototype._nop = function _nop() {
 
 
 const logform = __nccwpck_require__(25334);
-const { warn } = __nccwpck_require__(40590);
+const { warn } = __nccwpck_require__(90464);
 
 /**
  * Expose version. Use `require` method for `webpack` support.
  * @type {string}
  */
-exports.version = __nccwpck_require__(55001).version;
+exports.version = __nccwpck_require__(53823).version;
 /**
  * Include transports defined by default by winston
  * @type {Array}
  */
-exports.transports = __nccwpck_require__(86954);
+exports.transports = __nccwpck_require__(31764);
 /**
  * Expose utility methods
  * @type {Object}
  */
-exports.config = __nccwpck_require__(77950);
+exports.config = __nccwpck_require__(38372);
 /**
  * Hoist format-related functionality from logform.
  * @type {Object}
@@ -78658,27 +82988,27 @@ exports.format = logform.format;
  * Expose core Logging-related prototypes.
  * @type {function}
  */
-exports.createLogger = __nccwpck_require__(57652);
+exports.createLogger = __nccwpck_require__(72794);
 /**
  * Expose core Logging-related prototypes.
  * @type {function}
  */
-exports.Logger = __nccwpck_require__(77015);
+exports.Logger = __nccwpck_require__(3065);
 /**
  * Expose core Logging-related prototypes.
  * @type {Object}
  */
-exports.ExceptionHandler = __nccwpck_require__(77923);
+exports.ExceptionHandler = __nccwpck_require__(90829);
 /**
  * Expose core Logging-related prototypes.
  * @type {Object}
  */
-exports.RejectionHandler = __nccwpck_require__(77973);
+exports.RejectionHandler = __nccwpck_require__(88927);
 /**
  * Expose core Logging-related prototypes.
  * @type {Container}
  */
-exports.Container = __nccwpck_require__(83712);
+exports.Container = __nccwpck_require__(10898);
 /**
  * Expose core Logging-related prototypes.
  * @type {Object}
@@ -78812,7 +83142,7 @@ warn.forProperties(exports, 'deprecated', ['emitErrs', 'levelLength']);
 
 /***/ }),
 
-/***/ 40590:
+/***/ 90464:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -78866,7 +83196,7 @@ exports.warn = {
 
 /***/ }),
 
-/***/ 77950:
+/***/ 38372:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -78909,7 +83239,7 @@ exports.addColors = logform.levels;
 
 /***/ }),
 
-/***/ 83712:
+/***/ 10898:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -78922,7 +83252,7 @@ exports.addColors = logform.levels;
 
 
 
-const createLogger = __nccwpck_require__(57652);
+const createLogger = __nccwpck_require__(72794);
 
 /**
  * Inversion of control container for winston logger instances.
@@ -79035,7 +83365,7 @@ module.exports = class Container {
 
 /***/ }),
 
-/***/ 57652:
+/***/ 72794:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -79049,8 +83379,8 @@ module.exports = class Container {
 
 
 const { LEVEL } = __nccwpck_require__(93979);
-const config = __nccwpck_require__(77950);
-const Logger = __nccwpck_require__(77015);
+const config = __nccwpck_require__(38372);
+const Logger = __nccwpck_require__(3065);
 const debug = __nccwpck_require__(85538)('winston:create-logger');
 
 function isLevelEnabledFunctionName(level) {
@@ -79147,7 +83477,7 @@ module.exports = function (opts = {}) {
 
 /***/ }),
 
-/***/ 77923:
+/***/ 90829:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -79165,7 +83495,7 @@ const asyncForEach = __nccwpck_require__(562);
 const debug = __nccwpck_require__(85538)('winston:exception');
 const once = __nccwpck_require__(82020);
 const stackTrace = __nccwpck_require__(92774);
-const ExceptionStream = __nccwpck_require__(65295);
+const ExceptionStream = __nccwpck_require__(99469);
 
 /**
  * Object for handling uncaughtException events.
@@ -79400,7 +83730,7 @@ module.exports = class ExceptionHandler {
 
 /***/ }),
 
-/***/ 65295:
+/***/ 99469:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -79462,7 +83792,7 @@ module.exports = class ExceptionStream extends Writable {
 
 /***/ }),
 
-/***/ 77015:
+/***/ 3065:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -79479,12 +83809,12 @@ const { Stream, Transform } = __nccwpck_require__(45336);
 const asyncForEach = __nccwpck_require__(562);
 const { LEVEL, SPLAT } = __nccwpck_require__(93979);
 const isStream = __nccwpck_require__(82198);
-const ExceptionHandler = __nccwpck_require__(77923);
-const RejectionHandler = __nccwpck_require__(77973);
+const ExceptionHandler = __nccwpck_require__(90829);
+const RejectionHandler = __nccwpck_require__(88927);
 const LegacyTransportStream = __nccwpck_require__(16395);
-const Profiler = __nccwpck_require__(15154);
-const { warn } = __nccwpck_require__(40590);
-const config = __nccwpck_require__(77950);
+const Profiler = __nccwpck_require__(93980);
+const { warn } = __nccwpck_require__(90464);
+const config = __nccwpck_require__(38372);
 
 /**
  * Captures the number of format (i.e. %s strings) in a given string.
@@ -79530,6 +83860,7 @@ class Logger extends Transform {
           if (info instanceof Error) {
             infoClone.stack = info.stack;
             infoClone.message = info.message;
+            infoClone.cause = info.cause;
           }
 
           logger.write(infoClone);
@@ -80169,7 +84500,7 @@ module.exports = Logger;
 
 /***/ }),
 
-/***/ 15154:
+/***/ 93980:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -80195,7 +84526,7 @@ class Profiler {
    * @private
    */
   constructor(logger) {
-    const Logger = __nccwpck_require__(77015);
+    const Logger = __nccwpck_require__(3065);
     if (typeof logger !== 'object' || Array.isArray(logger) || !(logger instanceof Logger)) {
       throw new Error('Logger is required for profiling');
     } else {
@@ -80223,14 +84554,14 @@ class Profiler {
 
     return this.logger.write(info);
   }
-};
+}
 
 module.exports = Profiler;
 
 
 /***/ }),
 
-/***/ 77973:
+/***/ 88927:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -80248,7 +84579,7 @@ const asyncForEach = __nccwpck_require__(562);
 const debug = __nccwpck_require__(85538)('winston:rejection');
 const once = __nccwpck_require__(82020);
 const stackTrace = __nccwpck_require__(92774);
-const RejectionStream = __nccwpck_require__(98917);
+const RejectionStream = __nccwpck_require__(44107);
 
 /**
  * Object for handling unhandledRejection events.
@@ -80489,7 +84820,7 @@ module.exports = class RejectionHandler {
 
 /***/ }),
 
-/***/ 98917:
+/***/ 44107:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -80549,7 +84880,7 @@ module.exports = class RejectionStream extends Writable {
 
 /***/ }),
 
-/***/ 63772:
+/***/ 21206:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -80681,7 +85012,7 @@ module.exports = (options, iter) => {
 
 /***/ }),
 
-/***/ 88063:
+/***/ 35377:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -80814,7 +85145,7 @@ module.exports = class Console extends TransportStream {
 
 /***/ }),
 
-/***/ 76622:
+/***/ 95852:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -80837,7 +85168,7 @@ const { Stream, PassThrough } = __nccwpck_require__(45336);
 const TransportStream = __nccwpck_require__(74826);
 const debug = __nccwpck_require__(85538)('winston:file');
 const os = __nccwpck_require__(70857);
-const tailFile = __nccwpck_require__(63772);
+const tailFile = __nccwpck_require__(21206);
 
 /**
  * Transport for outputting to a local log file.
@@ -80927,6 +85258,38 @@ module.exports = class File extends TransportStream {
         setImmediate(() => this._stream.end());
       }
     }
+  }
+
+  /**
+   * Called by Node.js Writable stream before emitting 'finish'.
+   * Ensures all buffered data is flushed to the underlying file stream
+   * before the transport signals completion.
+   * @param {Function} callback - Callback to signal completion.
+   * @private
+   */
+  _final(callback) {
+    // If still opening, wait for the file to be opened first
+    if (this._opening) {
+      this.once('open', () => this._final(callback));
+      return;
+    }
+
+    // End the PassThrough stream
+    this._stream.end();
+
+    // No destination stream, call callback immediately
+    if (!this._dest) {
+      return callback();
+    }
+
+    // Destination is already finished
+    if (this._dest.writableFinished) {
+      return callback();
+    }
+
+    // Wait for destination stream to finish writing
+    this._dest.once('finish', callback);
+    this._dest.once('error', callback);
   }
 
   /**
@@ -81585,7 +85948,7 @@ module.exports = class File extends TransportStream {
 
 /***/ }),
 
-/***/ 6080:
+/***/ 5962:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -81855,7 +86218,7 @@ module.exports = class Http extends TransportStream {
 
 /***/ }),
 
-/***/ 86954:
+/***/ 31764:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -81876,7 +86239,7 @@ Object.defineProperty(exports, "Console", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require__(88063);
+    return __nccwpck_require__(35377);
   }
 }));
 
@@ -81888,7 +86251,7 @@ Object.defineProperty(exports, "File", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require__(76622);
+    return __nccwpck_require__(95852);
   }
 }));
 
@@ -81900,7 +86263,7 @@ Object.defineProperty(exports, "Http", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require__(6080);
+    return __nccwpck_require__(5962);
   }
 }));
 
@@ -81912,14 +86275,14 @@ Object.defineProperty(exports, "Stream", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require__(31280);
+    return __nccwpck_require__(84874);
   }
 }));
 
 
 /***/ }),
 
-/***/ 31280:
+/***/ 84874:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -81990,34 +86353,43 @@ module.exports = class Stream extends TransportStream {
 
 /***/ }),
 
-/***/ 33449:
+/***/ 13492:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const WebSocket = __nccwpck_require__(7494);
+const createWebSocketStream = __nccwpck_require__(98254);
+const extension = __nccwpck_require__(62677);
+const PerMessageDeflate = __nccwpck_require__(3734);
+const Receiver = __nccwpck_require__(75807);
+const Sender = __nccwpck_require__(31387);
+const subprotocol = __nccwpck_require__(68382);
+const WebSocket = __nccwpck_require__(10159);
+const WebSocketServer = __nccwpck_require__(95867);
 
-WebSocket.createWebSocketStream = __nccwpck_require__(20213);
-WebSocket.Server = __nccwpck_require__(70544);
-WebSocket.Receiver = __nccwpck_require__(25372);
-WebSocket.Sender = __nccwpck_require__(6996);
-
+WebSocket.createWebSocketStream = createWebSocketStream;
+WebSocket.extension = extension;
+WebSocket.PerMessageDeflate = PerMessageDeflate;
+WebSocket.Receiver = Receiver;
+WebSocket.Sender = Sender;
+WebSocket.Server = WebSocketServer;
+WebSocket.subprotocol = subprotocol;
 WebSocket.WebSocket = WebSocket;
-WebSocket.WebSocketServer = WebSocket.Server;
+WebSocket.WebSocketServer = WebSocketServer;
 
 module.exports = WebSocket;
 
 
 /***/ }),
 
-/***/ 31900:
+/***/ 16825:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { EMPTY_BUFFER } = __nccwpck_require__(14136);
+const { EMPTY_BUFFER } = __nccwpck_require__(35205);
 
 const FastBuffer = Buffer[Symbol.species];
 
@@ -82150,7 +86522,7 @@ if (!process.env.WS_NO_BUFFER_UTIL) {
 
 /***/ }),
 
-/***/ 14136:
+/***/ 35205:
 /***/ ((module) => {
 
 "use strict";
@@ -82163,6 +86535,7 @@ if (hasBlob) BINARY_TYPES.push('blob');
 
 module.exports = {
   BINARY_TYPES,
+  CLOSE_TIMEOUT: 30000,
   EMPTY_BUFFER: Buffer.alloc(0),
   GUID: '258EAFA5-E914-47DA-95CA-C5AB0DC85B11',
   hasBlob,
@@ -82176,13 +86549,13 @@ module.exports = {
 
 /***/ }),
 
-/***/ 87011:
+/***/ 60948:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { kForOnEventAttribute, kListener } = __nccwpck_require__(14136);
+const { kForOnEventAttribute, kListener } = __nccwpck_require__(35205);
 
 const kCode = Symbol('kCode');
 const kData = Symbol('kData');
@@ -82476,13 +86849,13 @@ function callListener(listener, thisArg, event) {
 
 /***/ }),
 
-/***/ 97232:
+/***/ 62677:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { tokenChars } = __nccwpck_require__(92010);
+const { tokenChars } = __nccwpck_require__(1917);
 
 /**
  * Adds an offer to the map of extension offers or a parameter to the map of
@@ -82687,7 +87060,7 @@ module.exports = { format, parse };
 
 /***/ }),
 
-/***/ 38293:
+/***/ 36848:
 /***/ ((module) => {
 
 "use strict";
@@ -82750,7 +87123,7 @@ module.exports = Limiter;
 
 /***/ }),
 
-/***/ 30101:
+/***/ 3734:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -82758,9 +87131,9 @@ module.exports = Limiter;
 
 const zlib = __nccwpck_require__(43106);
 
-const bufferUtil = __nccwpck_require__(31900);
-const Limiter = __nccwpck_require__(38293);
-const { kStatusCode } = __nccwpck_require__(14136);
+const bufferUtil = __nccwpck_require__(16825);
+const Limiter = __nccwpck_require__(36848);
+const { kStatusCode } = __nccwpck_require__(35205);
 
 const FastBuffer = Buffer[Symbol.species];
 const TRAILER = Buffer.from([0x00, 0x00, 0xff, 0xff]);
@@ -82793,6 +87166,9 @@ class PerMessageDeflate {
    *     acknowledge disabling of client context takeover
    * @param {Number} [options.concurrencyLimit=10] The number of concurrent
    *     calls to zlib
+   * @param {Boolean} [options.isServer=false] Create the instance in either
+   *     server or client mode
+   * @param {Number} [options.maxPayload=0] The maximum allowed message length
    * @param {(Boolean|Number)} [options.serverMaxWindowBits] Request/confirm the
    *     use of a custom server window size
    * @param {Boolean} [options.serverNoContextTakeover=false] Request/accept
@@ -82803,16 +87179,13 @@ class PerMessageDeflate {
    *     deflate
    * @param {Object} [options.zlibInflateOptions] Options to pass to zlib on
    *     inflate
-   * @param {Boolean} [isServer=false] Create the instance in either server or
-   *     client mode
-   * @param {Number} [maxPayload=0] The maximum allowed message length
    */
-  constructor(options, isServer, maxPayload) {
-    this._maxPayload = maxPayload | 0;
+  constructor(options) {
     this._options = options || {};
     this._threshold =
       this._options.threshold !== undefined ? this._options.threshold : 1024;
-    this._isServer = !!isServer;
+    this._maxPayload = this._options.maxPayload | 0;
+    this._isServer = !!this._options.isServer;
     this._deflate = null;
     this._inflate = null;
 
@@ -83286,7 +87659,7 @@ function inflateOnError(err) {
 
 /***/ }),
 
-/***/ 25372:
+/***/ 75807:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -83294,15 +87667,15 @@ function inflateOnError(err) {
 
 const { Writable } = __nccwpck_require__(2203);
 
-const PerMessageDeflate = __nccwpck_require__(30101);
+const PerMessageDeflate = __nccwpck_require__(3734);
 const {
   BINARY_TYPES,
   EMPTY_BUFFER,
   kStatusCode,
   kWebSocket
-} = __nccwpck_require__(14136);
-const { concat, toArrayBuffer, unmask } = __nccwpck_require__(31900);
-const { isValidStatusCode, isValidUTF8 } = __nccwpck_require__(92010);
+} = __nccwpck_require__(35205);
+const { concat, toArrayBuffer, unmask } = __nccwpck_require__(16825);
+const { isValidStatusCode, isValidUTF8 } = __nccwpck_require__(1917);
 
 const FastBuffer = Buffer[Symbol.species];
 
@@ -84000,7 +88373,7 @@ module.exports = Receiver;
 
 /***/ }),
 
-/***/ 6996:
+/***/ 31387:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -84010,11 +88383,14 @@ module.exports = Receiver;
 
 const { Duplex } = __nccwpck_require__(2203);
 const { randomFillSync } = __nccwpck_require__(76982);
+const {
+  types: { isUint8Array }
+} = __nccwpck_require__(39023);
 
-const PerMessageDeflate = __nccwpck_require__(30101);
-const { EMPTY_BUFFER, kWebSocket, NOOP } = __nccwpck_require__(14136);
-const { isBlob, isValidStatusCode } = __nccwpck_require__(92010);
-const { mask: applyMask, toBuffer } = __nccwpck_require__(31900);
+const PerMessageDeflate = __nccwpck_require__(3734);
+const { EMPTY_BUFFER, kWebSocket, NOOP } = __nccwpck_require__(35205);
+const { isBlob, isValidStatusCode } = __nccwpck_require__(1917);
+const { mask: applyMask, toBuffer } = __nccwpck_require__(16825);
 
 const kByteLength = Symbol('kByteLength');
 const maskBuffer = Buffer.alloc(4);
@@ -84206,8 +88582,10 @@ class Sender {
 
       if (typeof data === 'string') {
         buf.write(data, 2);
-      } else {
+      } else if (isUint8Array(data)) {
         buf.set(data, 2);
+      } else {
+        throw new TypeError('Second argument must be a string or a Uint8Array');
       }
     }
 
@@ -84610,14 +88988,14 @@ function onError(sender, err, cb) {
 
 /***/ }),
 
-/***/ 20213:
+/***/ 98254:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* eslint no-unused-vars: ["error", { "varsIgnorePattern": "^WebSocket$" }] */
 
 
-const WebSocket = __nccwpck_require__(7494);
+const WebSocket = __nccwpck_require__(10159);
 const { Duplex } = __nccwpck_require__(2203);
 
 /**
@@ -84779,13 +89157,13 @@ module.exports = createWebSocketStream;
 
 /***/ }),
 
-/***/ 77747:
+/***/ 68382:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { tokenChars } = __nccwpck_require__(92010);
+const { tokenChars } = __nccwpck_require__(1917);
 
 /**
  * Parses the `Sec-WebSocket-Protocol` header into a set of subprotocol names.
@@ -84849,7 +89227,7 @@ module.exports = { parse };
 
 /***/ }),
 
-/***/ 92010:
+/***/ 1917:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -84857,7 +89235,7 @@ module.exports = { parse };
 
 const { isUtf8 } = __nccwpck_require__(20181);
 
-const { hasBlob } = __nccwpck_require__(14136);
+const { hasBlob } = __nccwpck_require__(35205);
 
 //
 // Allowed token characters:
@@ -85009,7 +89387,7 @@ if (isUtf8) {
 
 /***/ }),
 
-/***/ 70544:
+/***/ 95867:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -85022,11 +89400,11 @@ const http = __nccwpck_require__(58611);
 const { Duplex } = __nccwpck_require__(2203);
 const { createHash } = __nccwpck_require__(76982);
 
-const extension = __nccwpck_require__(97232);
-const PerMessageDeflate = __nccwpck_require__(30101);
-const subprotocol = __nccwpck_require__(77747);
-const WebSocket = __nccwpck_require__(7494);
-const { GUID, kWebSocket } = __nccwpck_require__(14136);
+const extension = __nccwpck_require__(62677);
+const PerMessageDeflate = __nccwpck_require__(3734);
+const subprotocol = __nccwpck_require__(68382);
+const WebSocket = __nccwpck_require__(10159);
+const { CLOSE_TIMEOUT, GUID, kWebSocket } = __nccwpck_require__(35205);
 
 const keyRegex = /^[+/0-9A-Za-z]{22}==$/;
 
@@ -85053,6 +89431,9 @@ class WebSocketServer extends EventEmitter {
    *     pending connections
    * @param {Boolean} [options.clientTracking=true] Specifies whether or not to
    *     track clients
+   * @param {Number} [options.closeTimeout=30000] Duration in milliseconds to
+   *     wait for the closing handshake to finish after `websocket.close()` is
+   *     called
    * @param {Function} [options.handleProtocols] A hook to handle protocols
    * @param {String} [options.host] The hostname where to bind the server
    * @param {Number} [options.maxPayload=104857600] The maximum allowed message
@@ -85082,6 +89463,7 @@ class WebSocketServer extends EventEmitter {
       perMessageDeflate: false,
       handleProtocols: null,
       clientTracking: true,
+      closeTimeout: CLOSE_TIMEOUT,
       verifyClient: null,
       noServer: false,
       backlog: null, // use default (511 as implemented in net.js)
@@ -85304,11 +89686,11 @@ class WebSocketServer extends EventEmitter {
       this.options.perMessageDeflate &&
       secWebSocketExtensions !== undefined
     ) {
-      const perMessageDeflate = new PerMessageDeflate(
-        this.options.perMessageDeflate,
-        true,
-        this.options.maxPayload
-      );
+      const perMessageDeflate = new PerMessageDeflate({
+        ...this.options.perMessageDeflate,
+        isServer: true,
+        maxPayload: this.options.maxPayload
+      });
 
       try {
         const offers = extension.parse(secWebSocketExtensions);
@@ -85567,7 +89949,7 @@ function abortHandshakeOrEmitwsClientError(
 
 /***/ }),
 
-/***/ 7494:
+/***/ 10159:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -85584,13 +89966,14 @@ const { randomBytes, createHash } = __nccwpck_require__(76982);
 const { Duplex, Readable } = __nccwpck_require__(2203);
 const { URL } = __nccwpck_require__(87016);
 
-const PerMessageDeflate = __nccwpck_require__(30101);
-const Receiver = __nccwpck_require__(25372);
-const Sender = __nccwpck_require__(6996);
-const { isBlob } = __nccwpck_require__(92010);
+const PerMessageDeflate = __nccwpck_require__(3734);
+const Receiver = __nccwpck_require__(75807);
+const Sender = __nccwpck_require__(31387);
+const { isBlob } = __nccwpck_require__(1917);
 
 const {
   BINARY_TYPES,
+  CLOSE_TIMEOUT,
   EMPTY_BUFFER,
   GUID,
   kForOnEventAttribute,
@@ -85598,14 +89981,13 @@ const {
   kStatusCode,
   kWebSocket,
   NOOP
-} = __nccwpck_require__(14136);
+} = __nccwpck_require__(35205);
 const {
   EventTarget: { addEventListener, removeEventListener }
-} = __nccwpck_require__(87011);
-const { format, parse } = __nccwpck_require__(97232);
-const { toBuffer } = __nccwpck_require__(31900);
+} = __nccwpck_require__(60948);
+const { format, parse } = __nccwpck_require__(62677);
+const { toBuffer } = __nccwpck_require__(16825);
 
-const closeTimeout = 30 * 1000;
 const kAborted = Symbol('kAborted');
 const protocolVersions = [8, 13];
 const readyStates = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
@@ -85661,6 +90043,7 @@ class WebSocket extends EventEmitter {
       initAsClient(this, address, protocols, options);
     } else {
       this._autoPong = options.autoPong;
+      this._closeTimeout = options.closeTimeout;
       this._isServer = true;
     }
   }
@@ -86202,6 +90585,8 @@ module.exports = WebSocket;
  *     times in the same tick
  * @param {Boolean} [options.autoPong=true] Specifies whether or not to
  *     automatically send a pong in response to a ping
+ * @param {Number} [options.closeTimeout=30000] Duration in milliseconds to wait
+ *     for the closing handshake to finish after `websocket.close()` is called
  * @param {Function} [options.finishRequest] A function which can be used to
  *     customize the headers of each http request before it is sent
  * @param {Boolean} [options.followRedirects=false] Whether or not to follow
@@ -86228,6 +90613,7 @@ function initAsClient(websocket, address, protocols, options) {
   const opts = {
     allowSynchronousEvents: true,
     autoPong: true,
+    closeTimeout: CLOSE_TIMEOUT,
     protocolVersion: protocolVersions[1],
     maxPayload: 100 * 1024 * 1024,
     skipUTF8Validation: false,
@@ -86246,6 +90632,7 @@ function initAsClient(websocket, address, protocols, options) {
   };
 
   websocket._autoPong = opts.autoPong;
+  websocket._closeTimeout = opts.closeTimeout;
 
   if (!protocolVersions.includes(opts.protocolVersion)) {
     throw new RangeError(
@@ -86261,7 +90648,7 @@ function initAsClient(websocket, address, protocols, options) {
   } else {
     try {
       parsedUrl = new URL(address);
-    } catch (e) {
+    } catch {
       throw new SyntaxError(`Invalid URL: ${address}`);
     }
   }
@@ -86323,11 +90710,11 @@ function initAsClient(websocket, address, protocols, options) {
   opts.timeout = opts.handshakeTimeout;
 
   if (opts.perMessageDeflate) {
-    perMessageDeflate = new PerMessageDeflate(
-      opts.perMessageDeflate !== true ? opts.perMessageDeflate : {},
-      false,
-      opts.maxPayload
-    );
+    perMessageDeflate = new PerMessageDeflate({
+      ...opts.perMessageDeflate,
+      isServer: false,
+      maxPayload: opts.maxPayload
+    });
     opts.headers['Sec-WebSocket-Extensions'] = format({
       [PerMessageDeflate.extensionName]: perMessageDeflate.offer()
     });
@@ -86863,7 +91250,7 @@ function senderOnError(err) {
 function setCloseTimer(websocket) {
   websocket._closeTimer = setTimeout(
     websocket._socket.destroy.bind(websocket._socket),
-    closeTimeout
+    websocket._closeTimeout
   );
 }
 
@@ -86881,23 +91268,23 @@ function socketOnClose() {
 
   websocket._readyState = WebSocket.CLOSING;
 
-  let chunk;
-
   //
   // The close frame might not have been received or the `'end'` event emitted,
   // for example, if the socket was destroyed due to an error. Ensure that the
   // `receiver` stream is closed after writing any remaining buffered data to
   // it. If the readable side of the socket is in flowing mode then there is no
-  // buffered data as everything has been already written and `readable.read()`
-  // will return `null`. If instead, the socket is paused, any possible buffered
-  // data will be read as a single chunk.
+  // buffered data as everything has been already written. If instead, the
+  // socket is paused, any possible buffered data will be read as a single
+  // chunk.
   //
   if (
     !this._readableState.endEmitted &&
     !websocket._closeFrameReceived &&
     !websocket._receiver._writableState.errorEmitted &&
-    (chunk = websocket._socket.read()) !== null
+    this._readableState.length !== 0
   ) {
+    const chunk = this.read(this._readableState.length);
+
     websocket._receiver.write(chunk);
   }
 
@@ -87006,6 +91393,12 @@ const core = __importStar(__nccwpck_require__(16966));
 const validator_1 = __nccwpck_require__(12424);
 const package_json_1 = __nccwpck_require__(8330);
 const subscription_1 = __nccwpck_require__(14565);
+function parseListInput(value) {
+    return value
+        .split(/[,\n]/)
+        .map((item) => item.trim().replace(/^-\s*/, ''))
+        .filter((item) => item.length > 0);
+}
 async function run() {
     const logPrefix = '[ValidatePowerOn]';
     try {
@@ -87018,12 +91411,13 @@ async function run() {
         const sshUsername = core.getInput('ssh-username', { required: true });
         const sshPassword = core.getInput('ssh-password', { required: true });
         const sshPortInput = core.getInput('ssh-port', { required: false }) || '22';
-        const apiKey = core.getInput('api-key', { required: true });
+        const apiKey = core.getInput('api-key', { required: true }).trim();
         const symitarAppPort = core.getInput('symitar-app-port', { required: false });
         const connectionType = core.getInput('connection-type', { required: false }) || 'ssh';
         const poweronDirectory = core.getInput('poweron-directory', { required: false }) || 'REPWRITERSPECS/';
         const targetBranch = core.getInput('target-branch', { required: false });
         const validateIgnore = core.getInput('validate-ignore', { required: false }) || '';
+        const preserveServerFilesInput = core.getInput('preserve-server-files', { required: false }) || '';
         const debug = core.getInput('debug', { required: false }) === 'true';
         const syncMethod = core.getInput('sync-method', { required: false }) || 'sftp';
         // Mask sensitive information
@@ -87059,10 +91453,8 @@ async function run() {
             }
         }
         // Parse ignore list
-        const ignoreList = validateIgnore
-            .split(',')
-            .map((f) => f.trim())
-            .filter((f) => f.length > 0);
+        const ignoreList = parseListInput(validateIgnore);
+        const preserveServerFiles = parseListInput(preserveServerFilesInput);
         core.info(`${logPrefix} Starting PowerOn validation (v${package_json_1.version})`);
         core.info(`${logPrefix} Connection Type: ${connectionType.toUpperCase()}`);
         core.info(`${logPrefix} Sync Method: ${syncMethod.toUpperCase()}`);
@@ -87080,6 +91472,9 @@ async function run() {
         }
         if (ignoreList.length > 0) {
             core.info(`${logPrefix} Ignoring: ${ignoreList.join(', ')}`);
+        }
+        if (preserveServerFiles.length > 0) {
+            core.info(`${logPrefix} Preserving server files: ${preserveServerFiles.join(', ')}`);
         }
         if (debug) {
             core.info(`${logPrefix} Debug mode: enabled`);
@@ -87100,6 +91495,7 @@ async function run() {
             poweronDirectory,
             targetBranch,
             ignoreList,
+            preserveServerFiles,
             logPrefix,
             debug,
             syncMethod: syncMethod,
@@ -87262,10 +91658,11 @@ exports.ConnectionError = ConnectionError;
  */
 const validateApiKey = async (apiKey, host) => {
     const logPrefix = '[ValidateSubscription]';
+    const normalizedApiKey = apiKey.trim();
     console.info(`${logPrefix} Validating API key for host: ${host}`);
-    if (!apiKey || !apiKey.trim()) {
-        console.error(`${logPrefix} No API key provided. Please make sure 'apiKey' is set properly in your workflow.`);
-        throw new AuthenticationError('PowerOn Pipelines API Key is missing', apiKey, host);
+    if (!normalizedApiKey) {
+        console.error(`${logPrefix} No API key provided. Please make sure 'api-key' is set properly in your workflow.`);
+        throw new AuthenticationError('PowerOn Pipelines API Key is missing', normalizedApiKey, host);
     }
     const url = `https://${sstStagePrefix}license${isSandbox ? '.libum-sandbox' : ''}.libum.io/subscriptionsByApiKey?product=poweron-pipelines&unit=${host}`;
     for (let attempt = 1; attempt <= MAX_API_RETRIES; attempt++) {
@@ -87275,29 +91672,29 @@ const validateApiKey = async (apiKey, host) => {
             const response = await fetch(url, {
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-API-Key': apiKey,
+                    'X-API-Key': normalizedApiKey,
                 },
                 signal: controller.signal,
                 method: 'GET',
             });
             if (!response.ok) {
                 console.error(`${logPrefix} Failed to validate API key. Status: ${response.status}, Message: ${response.statusText}`);
-                throw new AuthenticationError(`Failed to validate API key: ${response.status} ${response.statusText}`, apiKey, host);
+                throw new AuthenticationError(`Failed to validate API key: ${response.status} ${response.statusText}`, normalizedApiKey, host);
             }
             const data = await response.json();
             // Validate response structure with type guard
             if (!isSubscriptionResponse(data)) {
-                throw new AuthenticationError('Invalid response format from license server', apiKey, host);
+                throw new AuthenticationError('Invalid response format from license server', normalizedApiKey, host);
             }
             if (!data.isFound) {
-                throw new AuthenticationError(`Provided API key was not found. Please make sure 'apiKey' is set properly in your workflow.`, apiKey, host);
+                throw new AuthenticationError(`Provided API key was not found. Please make sure 'api-key' is set properly in your workflow.`, normalizedApiKey, host);
             }
             if (data.subscriptions.length === 0) {
-                throw new AuthenticationError(`No active subscription found for the provided API key.`, apiKey, host);
+                throw new AuthenticationError(`No active subscription found for the provided API key.`, normalizedApiKey, host);
             }
             // Check if maximum hosts exceeded
             if (data.isMaxHostsExceeded) {
-                throw new AuthenticationError(`Provided API key has reached the maximum number of hosts allowed for the subscription. Please upgrade your subscription or remove unused hosts.`, apiKey, host);
+                throw new AuthenticationError(`Provided API key has reached the maximum number of hosts allowed for the subscription. Please upgrade your subscription or remove unused hosts.`, normalizedApiKey, host);
             }
             console.info(`${logPrefix} API key validation successful`);
             return;
@@ -87373,9 +91770,39 @@ exports.validatePowerOns = validatePowerOns;
 const core = __importStar(__nccwpck_require__(16966));
 const exec = __importStar(__nccwpck_require__(92851));
 const path = __importStar(__nccwpck_require__(16928));
-const symitar_1 = __nccwpck_require__(56541);
+const symitar_1 = __nccwpck_require__(9568);
 const subscription_1 = __nccwpck_require__(14565);
-async function getChangedFilesFromGit(targetBranch, poweronDirectory, ignoreList, logPrefix) {
+function getLocalPowerOnDirectory(config) {
+    return path.join(process.env.GITHUB_WORKSPACE || '', config.poweronDirectory);
+}
+function resolveLocalPowerOnPath(config, localDirectory, filePath) {
+    if (path.isAbsolute(filePath)) {
+        return filePath;
+    }
+    const normalizedFilePath = filePath.replace(/\\/g, '/');
+    const normalizedPowerOnDirectory = config.poweronDirectory
+        .replace(/\\/g, '/')
+        .replace(/\/+$/, '');
+    if (normalizedFilePath === normalizedPowerOnDirectory ||
+        normalizedFilePath.startsWith(`${normalizedPowerOnDirectory}/`)) {
+        return path.join(process.env.GITHUB_WORKSPACE || '', filePath);
+    }
+    return path.join(localDirectory, filePath);
+}
+function escapeRegExp(value) {
+    return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+function patternToRegExp(pattern) {
+    const source = pattern
+        .split('*')
+        .map((part) => part.split('?').map(escapeRegExp).join('.'))
+        .join('.*');
+    return new RegExp(`^${source}$`, 'i');
+}
+function matchesAnyPattern(fileName, patterns = []) {
+    return patterns.some((pattern) => patternToRegExp(pattern).test(fileName));
+}
+async function getChangedFilesFromGit(targetBranch, poweronDirectory, ignoreList, preserveServerFiles, logPrefix) {
     // Ensure we're running in the workspace directory
     const workspace = process.env.GITHUB_WORKSPACE;
     const execOptions = workspace ? { cwd: workspace } : {};
@@ -87434,6 +91861,10 @@ async function getChangedFilesFromGit(targetBranch, poweronDirectory, ignoreList
                 core.info(`${logPrefix} Skipping ${basename}. File is in ignore list.`);
                 continue;
             }
+            if (matchesAnyPattern(basename, preserveServerFiles)) {
+                core.info(`${logPrefix} Skipping ${basename}. File is preserved from server.`);
+                continue;
+            }
             // Check if this file should be validated (handles extension + content checks)
             const fullPath = path.isAbsolute(filePath)
                 ? filePath
@@ -87473,11 +91904,11 @@ async function validateWithHTTPs(config, files) {
         let filesToValidate;
         if (files === null) {
             core.info(`${config.logPrefix} Comparing local files with Sym ${config.symNumber} on ${config.symitarHostname}...`);
-            const workspace = process.env.GITHUB_WORKSPACE || '';
-            const localDirectory = path.join(workspace, config.poweronDirectory);
+            const localDirectory = getLocalPowerOnDirectory(config);
             const transport = config.syncMethod === 'rsync' ? symitar_1.SymitarSyncTransport.RSYNC : symitar_1.SymitarSyncTransport.SFTP;
             const changedPowerOns = await client.getChangedFiles(localDirectory, undefined, undefined, {
                 transport,
+                compareMode: 'quick',
             });
             filesToValidate = [];
             for (const filePath of changedPowerOns.deployed) {
@@ -87487,7 +91918,11 @@ async function validateWithHTTPs(config, files) {
                     core.info(`${config.logPrefix} Skipping ${basename}. File is in ignore list.`);
                     continue;
                 }
-                const fullPath = path.isAbsolute(filePath) ? filePath : path.join(localDirectory, filePath);
+                if (matchesAnyPattern(basename, config.preserveServerFiles)) {
+                    core.info(`${config.logPrefix} Skipping ${basename}. File is preserved from server.`);
+                    continue;
+                }
+                const fullPath = resolveLocalPowerOnPath(config, localDirectory, filePath);
                 const skipReason = await (0, symitar_1.getSkipReasonForFile)(fullPath);
                 if (skipReason) {
                     core.info(`${config.logPrefix} Skipping ${basename}. ${skipReason}`);
@@ -87522,7 +91957,9 @@ async function validateWithHTTPs(config, files) {
             validatedFiles.push(fileName);
             core.info(`${config.logPrefix} Validating ${fileName}...`);
             try {
-                const result = await client.validatePowerOn(file.filePath);
+                const result = await client.validatePowerOn(file.filePath, {
+                    localIncludeDir: getLocalPowerOnDirectory(config),
+                });
                 if (!result.isValid) {
                     filesFailed++;
                     const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
@@ -87567,10 +92004,9 @@ async function validateWithSSH(config, files) {
         let filesToValidate;
         if (files === null) {
             core.info(`${config.logPrefix} Comparing local files with Sym ${config.symNumber} on ${config.symitarHostname}...`);
-            const workspace = process.env.GITHUB_WORKSPACE || '';
-            const localDirectory = path.join(workspace, config.poweronDirectory);
+            const localDirectory = getLocalPowerOnDirectory(config);
             const transport = config.syncMethod === 'rsync' ? symitar_1.SymitarSyncTransport.RSYNC : symitar_1.SymitarSyncTransport.SFTP;
-            const changedPowerOns = await client.getChangedFiles(symitarConfig, localDirectory, undefined, undefined, { transport });
+            const changedPowerOns = await client.getChangedFiles(symitarConfig, localDirectory, undefined, undefined, { transport, compareMode: 'quick' });
             filesToValidate = [];
             for (const filePath of changedPowerOns.deployed) {
                 const basename = path.basename(filePath);
@@ -87579,7 +92015,11 @@ async function validateWithSSH(config, files) {
                     core.info(`${config.logPrefix} Skipping ${basename}. File is in ignore list.`);
                     continue;
                 }
-                const fullPath = path.isAbsolute(filePath) ? filePath : path.join(localDirectory, filePath);
+                if (matchesAnyPattern(basename, config.preserveServerFiles)) {
+                    core.info(`${config.logPrefix} Skipping ${basename}. File is preserved from server.`);
+                    continue;
+                }
+                const fullPath = resolveLocalPowerOnPath(config, localDirectory, filePath);
                 const skipReason = await (0, symitar_1.getSkipReasonForFile)(fullPath);
                 if (skipReason) {
                     core.info(`${config.logPrefix} Skipping ${basename}. ${skipReason}`);
@@ -87616,7 +92056,9 @@ async function validateWithSSH(config, files) {
             validatedFiles.push(fileName);
             core.info(`${config.logPrefix} Validating ${fileName}...`);
             try {
-                const result = await worker.validatePowerOn(file.filePath);
+                const result = await worker.validatePowerOn(file.filePath, {
+                    localIncludeDir: getLocalPowerOnDirectory(config),
+                });
                 if (!result.isValid) {
                     filesFailed++;
                     const errorMsg = Array.isArray(result.errors) ? result.errors.join('\n') : result.errors;
@@ -87649,7 +92091,7 @@ async function validatePowerOns(config) {
     // If target branch is provided, get changed files via git diff
     // Otherwise, pass null to let the client compare against the host
     if (config.targetBranch) {
-        const files = await getChangedFilesFromGit(config.targetBranch, config.poweronDirectory, config.ignoreList, config.logPrefix);
+        const files = await getChangedFilesFromGit(config.targetBranch, config.poweronDirectory, config.ignoreList, config.preserveServerFiles || [], config.logPrefix);
         if (files.length === 0) {
             core.info(`${config.logPrefix} No PowerOn files found to validate`);
             return {
@@ -89605,39 +94047,26 @@ module.exports = parseParams
 
 /***/ }),
 
-/***/ 27455:
+/***/ 11505:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
-/*! Axios v1.13.2 Copyright (c) 2025 Matt Zabriskie and contributors */
+/*! Axios v1.16.1 Copyright (c) 2026 Matt Zabriskie and contributors */
 
 
-const FormData$1 = __nccwpck_require__(92031);
-const crypto = __nccwpck_require__(76982);
-const url = __nccwpck_require__(87016);
-const proxyFromEnv = __nccwpck_require__(25331);
-const http = __nccwpck_require__(58611);
-const https = __nccwpck_require__(65692);
-const http2 = __nccwpck_require__(85675);
-const util = __nccwpck_require__(39023);
-const followRedirects = __nccwpck_require__(46676);
-const zlib = __nccwpck_require__(43106);
-const stream = __nccwpck_require__(2203);
-const events = __nccwpck_require__(24434);
-
-function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'default' in e ? e : { 'default': e }; }
-
-const FormData__default = /*#__PURE__*/_interopDefaultLegacy(FormData$1);
-const crypto__default = /*#__PURE__*/_interopDefaultLegacy(crypto);
-const url__default = /*#__PURE__*/_interopDefaultLegacy(url);
-const proxyFromEnv__default = /*#__PURE__*/_interopDefaultLegacy(proxyFromEnv);
-const http__default = /*#__PURE__*/_interopDefaultLegacy(http);
-const https__default = /*#__PURE__*/_interopDefaultLegacy(https);
-const http2__default = /*#__PURE__*/_interopDefaultLegacy(http2);
-const util__default = /*#__PURE__*/_interopDefaultLegacy(util);
-const followRedirects__default = /*#__PURE__*/_interopDefaultLegacy(followRedirects);
-const zlib__default = /*#__PURE__*/_interopDefaultLegacy(zlib);
-const stream__default = /*#__PURE__*/_interopDefaultLegacy(stream);
+var FormData$1 = __nccwpck_require__(92031);
+var crypto = __nccwpck_require__(76982);
+var url = __nccwpck_require__(87016);
+var HttpsProxyAgent = __nccwpck_require__(22540);
+var http = __nccwpck_require__(58611);
+var https = __nccwpck_require__(65692);
+var http2 = __nccwpck_require__(85675);
+var util = __nccwpck_require__(39023);
+var path = __nccwpck_require__(16928);
+var followRedirects = __nccwpck_require__(33881);
+var zlib = __nccwpck_require__(43106);
+var stream = __nccwpck_require__(2203);
+var events = __nccwpck_require__(24434);
 
 /**
  * Create a bound version of a function with a specified `this` context
@@ -89654,30 +94083,36 @@ function bind(fn, thisArg) {
 
 // utils is a library of generic helper functions non-specific to axios
 
-const {toString} = Object.prototype;
-const {getPrototypeOf} = Object;
-const {iterator, toStringTag} = Symbol;
-
+const {
+  toString
+} = Object.prototype;
+const {
+  getPrototypeOf
+} = Object;
+const {
+  iterator,
+  toStringTag
+} = Symbol;
 const kindOf = (cache => thing => {
-    const str = toString.call(thing);
-    return cache[str] || (cache[str] = str.slice(8, -1).toLowerCase());
+  const str = toString.call(thing);
+  return cache[str] || (cache[str] = str.slice(8, -1).toLowerCase());
 })(Object.create(null));
-
-const kindOfTest = (type) => {
+const kindOfTest = type => {
   type = type.toLowerCase();
-  return (thing) => kindOf(thing) === type
+  return thing => kindOf(thing) === type;
 };
-
 const typeOfTest = type => thing => typeof thing === type;
 
 /**
- * Determine if a value is an Array
+ * Determine if a value is a non-null object
  *
  * @param {Object} val The value to test
  *
  * @returns {boolean} True if value is an Array, otherwise false
  */
-const {isArray} = Array;
+const {
+  isArray
+} = Array;
 
 /**
  * Determine if a value is undefined
@@ -89696,8 +94131,7 @@ const isUndefined = typeOfTest('undefined');
  * @returns {boolean} True if value is a Buffer, otherwise false
  */
 function isBuffer(val) {
-  return val !== null && !isUndefined(val) && val.constructor !== null && !isUndefined(val.constructor)
-    && isFunction$1(val.constructor.isBuffer) && val.constructor.isBuffer(val);
+  return val !== null && !isUndefined(val) && val.constructor !== null && !isUndefined(val.constructor) && isFunction$1(val.constructor.isBuffer) && val.constructor.isBuffer(val);
 }
 
 /**
@@ -89709,7 +94143,6 @@ function isBuffer(val) {
  */
 const isArrayBuffer = kindOfTest('ArrayBuffer');
 
-
 /**
  * Determine if a value is a view on an ArrayBuffer
  *
@@ -89719,10 +94152,10 @@ const isArrayBuffer = kindOfTest('ArrayBuffer');
  */
 function isArrayBufferView(val) {
   let result;
-  if ((typeof ArrayBuffer !== 'undefined') && (ArrayBuffer.isView)) {
+  if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView) {
     result = ArrayBuffer.isView(val);
   } else {
-    result = (val) && (val.buffer) && (isArrayBuffer(val.buffer));
+    result = val && val.buffer && isArrayBuffer(val.buffer);
   }
   return result;
 }
@@ -89760,7 +94193,7 @@ const isNumber = typeOfTest('number');
  *
  * @returns {boolean} True if value is an Object, otherwise false
  */
-const isObject = (thing) => thing !== null && typeof thing === 'object';
+const isObject = thing => thing !== null && typeof thing === 'object';
 
 /**
  * Determine if a value is a Boolean
@@ -89777,11 +94210,10 @@ const isBoolean = thing => thing === true || thing === false;
  *
  * @returns {boolean} True if value is a plain Object, otherwise false
  */
-const isPlainObject = (val) => {
+const isPlainObject = val => {
   if (kindOf(val) !== 'object') {
     return false;
   }
-
   const prototype = getPrototypeOf(val);
   return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(toStringTag in val) && !(iterator in val);
 };
@@ -89793,12 +94225,11 @@ const isPlainObject = (val) => {
  *
  * @returns {boolean} True if value is an empty object, otherwise false
  */
-const isEmptyObject = (val) => {
+const isEmptyObject = val => {
   // Early return for non-objects or Buffers to prevent RangeError
   if (!isObject(val) || isBuffer(val)) {
     return false;
   }
-
   try {
     return Object.keys(val).length === 0 && Object.getPrototypeOf(val) === Object.prototype;
   } catch (e) {
@@ -89826,6 +94257,31 @@ const isDate = kindOfTest('Date');
 const isFile = kindOfTest('File');
 
 /**
+ * Determine if a value is a React Native Blob
+ * React Native "blob": an object with a `uri` attribute. Optionally, it can
+ * also have a `name` and `type` attribute to specify filename and content type
+ *
+ * @see https://github.com/facebook/react-native/blob/26684cf3adf4094eb6c405d345a75bf8c7c0bf88/Libraries/Network/FormData.js#L68-L71
+ *
+ * @param {*} value The value to test
+ *
+ * @returns {boolean} True if value is a React Native Blob, otherwise false
+ */
+const isReactNativeBlob = value => {
+  return !!(value && typeof value.uri !== 'undefined');
+};
+
+/**
+ * Determine if environment is React Native
+ * ReactNative `FormData` has a non-standard `getParts()` method
+ *
+ * @param {*} formData The formData to test
+ *
+ * @returns {boolean} True if environment is React Native, otherwise false
+ */
+const isReactNative = formData => formData && typeof formData.getParts !== 'undefined';
+
+/**
  * Determine if a value is a Blob
  *
  * @param {*} val The value to test
@@ -89839,7 +94295,7 @@ const isBlob = kindOfTest('Blob');
  *
  * @param {*} val The value to test
  *
- * @returns {boolean} True if value is a File, otherwise false
+ * @returns {boolean} True if value is a FileList, otherwise false
  */
 const isFileList = kindOfTest('FileList');
 
@@ -89850,7 +94306,7 @@ const isFileList = kindOfTest('FileList');
  *
  * @returns {boolean} True if value is a Stream, otherwise false
  */
-const isStream = (val) => isObject(val) && isFunction$1(val.pipe);
+const isStream = val => isObject(val) && isFunction$1(val.pipe);
 
 /**
  * Determine if a value is a FormData
@@ -89859,17 +94315,26 @@ const isStream = (val) => isObject(val) && isFunction$1(val.pipe);
  *
  * @returns {boolean} True if value is an FormData, otherwise false
  */
-const isFormData = (thing) => {
-  let kind;
-  return thing && (
-    (typeof FormData === 'function' && thing instanceof FormData) || (
-      isFunction$1(thing.append) && (
-        (kind = kindOf(thing)) === 'formdata' ||
-        // detect form-data instance
-        (kind === 'object' && isFunction$1(thing.toString) && thing.toString() === '[object FormData]')
-      )
-    )
-  )
+function getGlobal() {
+  if (typeof globalThis !== 'undefined') return globalThis;
+  if (typeof self !== 'undefined') return self;
+  if (typeof window !== 'undefined') return window;
+  if (typeof global !== 'undefined') return global;
+  return {};
+}
+const G = getGlobal();
+const FormDataCtor = typeof G.FormData !== 'undefined' ? G.FormData : undefined;
+const isFormData = thing => {
+  if (!thing) return false;
+  if (FormDataCtor && thing instanceof FormDataCtor) return true;
+  // Reject plain objects inheriting directly from Object.prototype so prototype-pollution gadgets can't spoof FormData.
+  const proto = getPrototypeOf(thing);
+  if (!proto || proto === Object.prototype) return false;
+  if (!isFunction$1(thing.append)) return false;
+  const kind = kindOf(thing);
+  return kind === 'formdata' ||
+  // detect form-data instance
+  kind === 'object' && isFunction$1(thing.toString) && thing.toString() === '[object FormData]';
 };
 
 /**
@@ -89880,7 +94345,6 @@ const isFormData = (thing) => {
  * @returns {boolean} True if value is a URLSearchParams object, otherwise false
  */
 const isURLSearchParams = kindOfTest('URLSearchParams');
-
 const [isReadableStream, isRequest, isResponse, isHeaders] = ['ReadableStream', 'Request', 'Response', 'Headers'].map(kindOfTest);
 
 /**
@@ -89890,9 +94354,9 @@ const [isReadableStream, isRequest, isResponse, isHeaders] = ['ReadableStream', 
  *
  * @returns {String} The String freed of excess whitespace
  */
-const trim = (str) => str.trim ?
-  str.trim() : str.replace(/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+$/g, '');
-
+const trim = str => {
+  return str.trim ? str.trim() : str.replace(/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+$/g, '');
+};
 /**
  * Iterate over an Array or an Object invoking a function for each item.
  *
@@ -89902,18 +94366,20 @@ const trim = (str) => str.trim ?
  * If 'obj' is an Object callback will be called passing
  * the value, key, and complete object for each property.
  *
- * @param {Object|Array} obj The object to iterate
+ * @param {Object|Array<unknown>} obj The object to iterate
  * @param {Function} fn The callback to invoke for each item
  *
- * @param {Boolean} [allOwnKeys = false]
+ * @param {Object} [options]
+ * @param {Boolean} [options.allOwnKeys = false]
  * @returns {any}
  */
-function forEach(obj, fn, {allOwnKeys = false} = {}) {
+function forEach(obj, fn, {
+  allOwnKeys = false
+} = {}) {
   // Don't bother if no value provided
   if (obj === null || typeof obj === 'undefined') {
     return;
   }
-
   let i;
   let l;
 
@@ -89922,7 +94388,6 @@ function forEach(obj, fn, {allOwnKeys = false} = {}) {
     /*eslint no-param-reassign:0*/
     obj = [obj];
   }
-
   if (isArray(obj)) {
     // Iterate over array values
     for (i = 0, l = obj.length; i < l; i++) {
@@ -89938,7 +94403,6 @@ function forEach(obj, fn, {allOwnKeys = false} = {}) {
     const keys = allOwnKeys ? Object.getOwnPropertyNames(obj) : Object.keys(obj);
     const len = keys.length;
     let key;
-
     for (i = 0; i < len; i++) {
       key = keys[i];
       fn.call(null, obj[key], key, obj);
@@ -89946,11 +94410,18 @@ function forEach(obj, fn, {allOwnKeys = false} = {}) {
   }
 }
 
+/**
+ * Finds a key in an object, case-insensitive, returning the actual key name.
+ * Returns null if the object is a Buffer or if no match is found.
+ *
+ * @param {Object} obj - The object to search.
+ * @param {string} key - The key to find (case-insensitive).
+ * @returns {?string} The actual key name if found, otherwise null.
+ */
 function findKey(obj, key) {
-  if (isBuffer(obj)){
+  if (isBuffer(obj)) {
     return null;
   }
-
   key = key.toLowerCase();
   const keys = Object.keys(obj);
   let i = keys.length;
@@ -89963,14 +94434,12 @@ function findKey(obj, key) {
   }
   return null;
 }
-
 const _global = (() => {
   /*eslint no-undef:0*/
-  if (typeof globalThis !== "undefined") return globalThis;
-  return typeof self !== "undefined" ? self : (typeof window !== 'undefined' ? window : global)
+  if (typeof globalThis !== 'undefined') return globalThis;
+  return typeof self !== 'undefined' ? self : typeof window !== 'undefined' ? window : global;
 })();
-
-const isContextDefined = (context) => !isUndefined(context) && context !== _global;
+const isContextDefined = context => !isUndefined(context) && context !== _global;
 
 /**
  * Accepts varargs expecting each argument to be an object, then
@@ -89982,7 +94451,7 @@ const isContextDefined = (context) => !isUndefined(context) && context !== _glob
  * Example:
  *
  * ```js
- * var result = merge({foo: 123}, {foo: 456});
+ * const result = merge({foo: 123}, {foo: 456});
  * console.log(result.foo); // outputs 456
  * ```
  *
@@ -89990,13 +94459,24 @@ const isContextDefined = (context) => !isUndefined(context) && context !== _glob
  *
  * @returns {Object} Result of all merge properties
  */
-function merge(/* obj1, obj2, obj3, ... */) {
-  const {caseless, skipUndefined} = isContextDefined(this) && this || {};
+function merge(...objs) {
+  const {
+    caseless,
+    skipUndefined
+  } = isContextDefined(this) && this || {};
   const result = {};
   const assignValue = (val, key) => {
+    // Skip dangerous property names to prevent prototype pollution
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      return;
+    }
     const targetKey = caseless && findKey(result, key) || key;
-    if (isPlainObject(result[targetKey]) && isPlainObject(val)) {
-      result[targetKey] = merge(result[targetKey], val);
+    // Read via own-prop only — a bare `result[targetKey]` walks the prototype
+    // chain, so a polluted Object.prototype value could surface here and get
+    // copied into the merged result.
+    const existing = hasOwnProperty(result, targetKey) ? result[targetKey] : undefined;
+    if (isPlainObject(existing) && isPlainObject(val)) {
+      result[targetKey] = merge(existing, val);
     } else if (isPlainObject(val)) {
       result[targetKey] = merge({}, val);
     } else if (isArray(val)) {
@@ -90005,9 +94485,8 @@ function merge(/* obj1, obj2, obj3, ... */) {
       result[targetKey] = val;
     }
   };
-
-  for (let i = 0, l = arguments.length; i < l; i++) {
-    arguments[i] && forEach(arguments[i], assignValue);
+  for (let i = 0, l = objs.length; i < l; i++) {
+    objs[i] && forEach(objs[i], assignValue);
   }
   return result;
 }
@@ -90019,17 +94498,36 @@ function merge(/* obj1, obj2, obj3, ... */) {
  * @param {Object} b The object to copy properties from
  * @param {Object} thisArg The object to bind function to
  *
- * @param {Boolean} [allOwnKeys]
+ * @param {Object} [options]
+ * @param {Boolean} [options.allOwnKeys]
  * @returns {Object} The resulting value of object a
  */
-const extend = (a, b, thisArg, {allOwnKeys}= {}) => {
+const extend = (a, b, thisArg, {
+  allOwnKeys
+} = {}) => {
   forEach(b, (val, key) => {
     if (thisArg && isFunction$1(val)) {
-      a[key] = bind(val, thisArg);
+      Object.defineProperty(a, key, {
+        // Null-proto descriptor so a polluted Object.prototype.get cannot
+        // hijack defineProperty's accessor-vs-data resolution.
+        __proto__: null,
+        value: bind(val, thisArg),
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
     } else {
-      a[key] = val;
+      Object.defineProperty(a, key, {
+        __proto__: null,
+        value: val,
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
     }
-  }, {allOwnKeys});
+  }, {
+    allOwnKeys
+  });
   return a;
 };
 
@@ -90040,8 +94538,8 @@ const extend = (a, b, thisArg, {allOwnKeys}= {}) => {
  *
  * @returns {string} content value without BOM
  */
-const stripBOM = (content) => {
-  if (content.charCodeAt(0) === 0xFEFF) {
+const stripBOM = content => {
+  if (content.charCodeAt(0) === 0xfeff) {
     content = content.slice(1);
   }
   return content;
@@ -90058,8 +94556,15 @@ const stripBOM = (content) => {
  */
 const inherits = (constructor, superConstructor, props, descriptors) => {
   constructor.prototype = Object.create(superConstructor.prototype, descriptors);
-  constructor.prototype.constructor = constructor;
+  Object.defineProperty(constructor.prototype, 'constructor', {
+    __proto__: null,
+    value: constructor,
+    writable: true,
+    enumerable: false,
+    configurable: true
+  });
   Object.defineProperty(constructor, 'super', {
+    __proto__: null,
     value: superConstructor.prototype
   });
   props && Object.assign(constructor.prototype, props);
@@ -90079,11 +94584,9 @@ const toFlatObject = (sourceObj, destObj, filter, propFilter) => {
   let i;
   let prop;
   const merged = {};
-
   destObj = destObj || {};
   // eslint-disable-next-line no-eq-null,eqeqeq
   if (sourceObj == null) return destObj;
-
   do {
     props = Object.getOwnPropertyNames(sourceObj);
     i = props.length;
@@ -90096,7 +94599,6 @@ const toFlatObject = (sourceObj, destObj, filter, propFilter) => {
     }
     sourceObj = filter !== false && getPrototypeOf(sourceObj);
   } while (sourceObj && (!filter || filter(sourceObj, destObj)) && sourceObj !== Object.prototype);
-
   return destObj;
 };
 
@@ -90119,7 +94621,6 @@ const endsWith = (str, searchString, position) => {
   return lastIndex !== -1 && lastIndex === position;
 };
 
-
 /**
  * Returns new array from array like object or null if failed
  *
@@ -90127,7 +94628,7 @@ const endsWith = (str, searchString, position) => {
  *
  * @returns {?Array}
  */
-const toArray = (thing) => {
+const toArray = thing => {
   if (!thing) return null;
   if (isArray(thing)) return thing;
   let i = thing.length;
@@ -90165,11 +94666,8 @@ const isTypedArray = (TypedArray => {
  */
 const forEachEntry = (obj, fn) => {
   const generator = obj && obj[iterator];
-
   const _iterator = generator.call(obj);
-
   let result;
-
   while ((result = _iterator.next()) && !result.done) {
     const pair = result.value;
     fn.call(obj, pair[0], pair[1]);
@@ -90187,27 +94685,24 @@ const forEachEntry = (obj, fn) => {
 const matchAll = (regExp, str) => {
   let matches;
   const arr = [];
-
   while ((matches = regExp.exec(str)) !== null) {
     arr.push(matches);
   }
-
   return arr;
 };
 
 /* Checking if the kindOfTest function returns true when passed an HTMLFormElement. */
 const isHTMLForm = kindOfTest('HTMLFormElement');
-
 const toCamelCase = str => {
-  return str.toLowerCase().replace(/[-_\s]([a-z\d])(\w*)/g,
-    function replacer(m, p1, p2) {
-      return p1.toUpperCase() + p2;
-    }
-  );
+  return str.toLowerCase().replace(/[-_\s]([a-z\d])(\w*)/g, function replacer(m, p1, p2) {
+    return p1.toUpperCase() + p2;
+  });
 };
 
 /* Creating a function that will check if an object has a property. */
-const hasOwnProperty = (({hasOwnProperty}) => (obj, prop) => hasOwnProperty.call(obj, prop))(Object.prototype);
+const hasOwnProperty = (({
+  hasOwnProperty
+}) => (obj, prop) => hasOwnProperty.call(obj, prop))(Object.prototype);
 
 /**
  * Determine if a value is a RegExp object
@@ -90217,18 +94712,15 @@ const hasOwnProperty = (({hasOwnProperty}) => (obj, prop) => hasOwnProperty.call
  * @returns {boolean} True if value is a RegExp object, otherwise false
  */
 const isRegExp = kindOfTest('RegExp');
-
 const reduceDescriptors = (obj, reducer) => {
   const descriptors = Object.getOwnPropertyDescriptors(obj);
   const reducedDescriptors = {};
-
   forEach(descriptors, (descriptor, name) => {
     let ret;
     if ((ret = reducer(descriptor, name, obj)) !== false) {
       reducedDescriptors[name] = ret || descriptor;
     }
   });
-
   Object.defineProperties(obj, reducedDescriptors);
 };
 
@@ -90237,53 +94729,49 @@ const reduceDescriptors = (obj, reducer) => {
  * @param {Object} obj
  */
 
-const freezeMethods = (obj) => {
+const freezeMethods = obj => {
   reduceDescriptors(obj, (descriptor, name) => {
     // skip restricted props in strict mode
-    if (isFunction$1(obj) && ['arguments', 'caller', 'callee'].indexOf(name) !== -1) {
+    if (isFunction$1(obj) && ['arguments', 'caller', 'callee'].includes(name)) {
       return false;
     }
-
     const value = obj[name];
-
     if (!isFunction$1(value)) return;
-
     descriptor.enumerable = false;
-
     if ('writable' in descriptor) {
       descriptor.writable = false;
       return;
     }
-
     if (!descriptor.set) {
       descriptor.set = () => {
-        throw Error('Can not rewrite read-only method \'' + name + '\'');
+        throw Error("Can not rewrite read-only method '" + name + "'");
       };
     }
   });
 };
 
+/**
+ * Converts an array or a delimited string into an object set with values as keys and true as values.
+ * Useful for fast membership checks.
+ *
+ * @param {Array|string} arrayOrString - The array or string to convert.
+ * @param {string} delimiter - The delimiter to use if input is a string.
+ * @returns {Object} An object with keys from the array or string, values set to true.
+ */
 const toObjectSet = (arrayOrString, delimiter) => {
   const obj = {};
-
-  const define = (arr) => {
+  const define = arr => {
     arr.forEach(value => {
       obj[value] = true;
     });
   };
-
   isArray(arrayOrString) ? define(arrayOrString) : define(String(arrayOrString).split(delimiter));
-
   return obj;
 };
-
 const noop = () => {};
-
 const toFiniteNumber = (value, defaultValue) => {
   return value != null && Number.isFinite(value = +value) ? value : defaultValue;
 };
-
-
 
 /**
  * If the thing is a FormData object, return true, otherwise return false.
@@ -90296,13 +94784,17 @@ function isSpecCompliantForm(thing) {
   return !!(thing && isFunction$1(thing.append) && thing[toStringTag] === 'FormData' && thing[iterator]);
 }
 
-const toJSONObject = (obj) => {
-  const stack = new Array(10);
-
-  const visit = (source, i) => {
-
+/**
+ * Recursively converts an object to a JSON-compatible object, handling circular references and Buffers.
+ *
+ * @param {Object} obj - The object to convert.
+ * @returns {Object} The JSON-compatible object.
+ */
+const toJSONObject = obj => {
+  const visited = new WeakSet();
+  const visit = source => {
     if (isObject(source)) {
-      if (stack.indexOf(source) >= 0) {
+      if (visited.has(source)) {
         return;
       }
 
@@ -90310,68 +94802,82 @@ const toJSONObject = (obj) => {
       if (isBuffer(source)) {
         return source;
       }
-
-      if(!('toJSON' in source)) {
-        stack[i] = source;
+      if (!('toJSON' in source)) {
+        // add-on descent / delete-on-ascent: preserves path semantics, so DAG nodes serialise at every occurrence (see #7230).
+        visited.add(source);
         const target = isArray(source) ? [] : {};
-
         forEach(source, (value, key) => {
-          const reducedValue = visit(value, i + 1);
+          const reducedValue = visit(value);
           !isUndefined(reducedValue) && (target[key] = reducedValue);
         });
-
-        stack[i] = undefined;
-
+        visited.delete(source);
         return target;
       }
     }
-
     return source;
   };
-
-  return visit(obj, 0);
+  return visit(obj);
 };
 
+/**
+ * Determines if a value is an async function.
+ *
+ * @param {*} thing - The value to test.
+ * @returns {boolean} True if value is an async function, otherwise false.
+ */
 const isAsyncFn = kindOfTest('AsyncFunction');
 
-const isThenable = (thing) =>
-  thing && (isObject(thing) || isFunction$1(thing)) && isFunction$1(thing.then) && isFunction$1(thing.catch);
+/**
+ * Determines if a value is thenable (has then and catch methods).
+ *
+ * @param {*} thing - The value to test.
+ * @returns {boolean} True if value is thenable, otherwise false.
+ */
+const isThenable = thing => thing && (isObject(thing) || isFunction$1(thing)) && isFunction$1(thing.then) && isFunction$1(thing.catch);
 
 // original code
 // https://github.com/DigitalBrainJS/AxiosPromise/blob/16deab13710ec09779922131f3fa5954320f83ab/lib/utils.js#L11-L34
 
+/**
+ * Provides a cross-platform setImmediate implementation.
+ * Uses native setImmediate if available, otherwise falls back to postMessage or setTimeout.
+ *
+ * @param {boolean} setImmediateSupported - Whether setImmediate is supported.
+ * @param {boolean} postMessageSupported - Whether postMessage is supported.
+ * @returns {Function} A function to schedule a callback asynchronously.
+ */
 const _setImmediate = ((setImmediateSupported, postMessageSupported) => {
   if (setImmediateSupported) {
     return setImmediate;
   }
-
   return postMessageSupported ? ((token, callbacks) => {
-    _global.addEventListener("message", ({source, data}) => {
+    _global.addEventListener('message', ({
+      source,
+      data
+    }) => {
       if (source === _global && data === token) {
         callbacks.length && callbacks.shift()();
       }
     }, false);
-
-    return (cb) => {
+    return cb => {
       callbacks.push(cb);
-      _global.postMessage(token, "*");
-    }
-  })(`axios@${Math.random()}`, []) : (cb) => setTimeout(cb);
-})(
-  typeof setImmediate === 'function',
-  isFunction$1(_global.postMessage)
-);
+      _global.postMessage(token, '*');
+    };
+  })(`axios@${Math.random()}`, []) : cb => setTimeout(cb);
+})(typeof setImmediate === 'function', isFunction$1(_global.postMessage));
 
-const asap = typeof queueMicrotask !== 'undefined' ?
-  queueMicrotask.bind(_global) : ( typeof process !== 'undefined' && process.nextTick || _setImmediate);
+/**
+ * Schedules a microtask or asynchronous callback as soon as possible.
+ * Uses queueMicrotask if available, otherwise falls back to process.nextTick or _setImmediate.
+ *
+ * @type {Function}
+ */
+const asap = typeof queueMicrotask !== 'undefined' ? queueMicrotask.bind(_global) : typeof process !== 'undefined' && process.nextTick || _setImmediate;
 
 // *********************
 
-
-const isIterable = (thing) => thing != null && isFunction$1(thing[iterator]);
-
-
-const utils$1 = {
+const isIterable = thing => thing != null && isFunction$1(thing[iterator]);
+var utils$1 = {
   isArray,
   isArrayBuffer,
   isBuffer,
@@ -90390,6 +94896,8 @@ const utils$1 = {
   isUndefined,
   isDate,
   isFile,
+  isReactNativeBlob,
+  isReactNative,
   isBlob,
   isRegExp,
   isFunction: isFunction$1,
@@ -90412,7 +94920,8 @@ const utils$1 = {
   matchAll,
   isHTMLForm,
   hasOwnProperty,
-  hasOwnProp: hasOwnProperty, // an alias to avoid ESLint no-prototype-builtins detection
+  hasOwnProp: hasOwnProperty,
+  // an alias to avoid ESLint no-prototype-builtins detection
   reduceDescriptors,
   freezeMethods,
   toObjectSet,
@@ -90431,39 +94940,440 @@ const utils$1 = {
   isIterable
 };
 
+// RawAxiosHeaders whose duplicates are ignored by node
+// c.f. https://nodejs.org/api/http.html#http_message_headers
+const ignoreDuplicateOf = utils$1.toObjectSet(['age', 'authorization', 'content-length', 'content-type', 'etag', 'expires', 'from', 'host', 'if-modified-since', 'if-unmodified-since', 'last-modified', 'location', 'max-forwards', 'proxy-authorization', 'referer', 'retry-after', 'user-agent']);
+
 /**
- * Create an Error with the specified message, config, error code, request and response.
+ * Parse headers into an object
  *
- * @param {string} message The error message.
- * @param {string} [code] The error code (for example, 'ECONNABORTED').
- * @param {Object} [config] The config.
- * @param {Object} [request] The request.
- * @param {Object} [response] The response.
+ * ```
+ * Date: Wed, 27 Aug 2014 08:58:49 GMT
+ * Content-Type: application/json
+ * Connection: keep-alive
+ * Transfer-Encoding: chunked
+ * ```
  *
- * @returns {Error} The created error.
+ * @param {String} rawHeaders Headers needing to be parsed
+ *
+ * @returns {Object} Headers parsed into an object
  */
-function AxiosError(message, code, config, request, response) {
-  Error.call(this);
+var parseHeaders = rawHeaders => {
+  const parsed = {};
+  let key;
+  let val;
+  let i;
+  rawHeaders && rawHeaders.split('\n').forEach(function parser(line) {
+    i = line.indexOf(':');
+    key = line.substring(0, i).trim().toLowerCase();
+    val = line.substring(i + 1).trim();
+    if (!key || parsed[key] && ignoreDuplicateOf[key]) {
+      return;
+    }
+    if (key === 'set-cookie') {
+      if (parsed[key]) {
+        parsed[key].push(val);
+      } else {
+        parsed[key] = [val];
+      }
+    } else {
+      parsed[key] = parsed[key] ? parsed[key] + ', ' + val : val;
+    }
+  });
+  return parsed;
+};
 
-  if (Error.captureStackTrace) {
-    Error.captureStackTrace(this, this.constructor);
-  } else {
-    this.stack = (new Error()).stack;
+function trimSPorHTAB(str) {
+  let start = 0;
+  let end = str.length;
+  while (start < end) {
+    const code = str.charCodeAt(start);
+    if (code !== 0x09 && code !== 0x20) {
+      break;
+    }
+    start += 1;
   }
-
-  this.message = message;
-  this.name = 'AxiosError';
-  code && (this.code = code);
-  config && (this.config = config);
-  request && (this.request = request);
-  if (response) {
-    this.response = response;
-    this.status = response.status ? response.status : null;
+  while (end > start) {
+    const code = str.charCodeAt(end - 1);
+    if (code !== 0x09 && code !== 0x20) {
+      break;
+    }
+    end -= 1;
   }
+  return start === 0 && end === str.length ? str : str.slice(start, end);
 }
 
-utils$1.inherits(AxiosError, Error, {
-  toJSON: function toJSON() {
+// The control-code ranges are intentional: header sanitization strips C0/DEL bytes.
+// eslint-disable-next-line no-control-regex
+const INVALID_UNICODE_HEADER_VALUE_CHARS = new RegExp('[\\u0000-\\u0008\\u000a-\\u001f\\u007f]+', 'g');
+// eslint-disable-next-line no-control-regex
+const INVALID_BYTE_STRING_HEADER_VALUE_CHARS = new RegExp('[^\\u0009\\u0020-\\u007e\\u0080-\\u00ff]+', 'g');
+function sanitizeValue(value, invalidChars) {
+  if (utils$1.isArray(value)) {
+    return value.map(item => sanitizeValue(item, invalidChars));
+  }
+  return trimSPorHTAB(String(value).replace(invalidChars, ''));
+}
+const sanitizeHeaderValue = value => sanitizeValue(value, INVALID_UNICODE_HEADER_VALUE_CHARS);
+const sanitizeByteStringHeaderValue = value => sanitizeValue(value, INVALID_BYTE_STRING_HEADER_VALUE_CHARS);
+function toByteStringHeaderObject(headers) {
+  const byteStringHeaders = Object.create(null);
+  utils$1.forEach(headers.toJSON(), (value, header) => {
+    byteStringHeaders[header] = sanitizeByteStringHeaderValue(value);
+  });
+  return byteStringHeaders;
+}
+
+const $internals = Symbol('internals');
+function normalizeHeader(header) {
+  return header && String(header).trim().toLowerCase();
+}
+function normalizeValue(value) {
+  if (value === false || value == null) {
+    return value;
+  }
+  return utils$1.isArray(value) ? value.map(normalizeValue) : sanitizeHeaderValue(String(value));
+}
+function parseTokens(str) {
+  const tokens = Object.create(null);
+  const tokensRE = /([^\s,;=]+)\s*(?:=\s*([^,;]+))?/g;
+  let match;
+  while (match = tokensRE.exec(str)) {
+    tokens[match[1]] = match[2];
+  }
+  return tokens;
+}
+const isValidHeaderName = str => /^[-_a-zA-Z0-9^`|~,!#$%&'*+.]+$/.test(str.trim());
+function matchHeaderValue(context, value, header, filter, isHeaderNameFilter) {
+  if (utils$1.isFunction(filter)) {
+    return filter.call(this, value, header);
+  }
+  if (isHeaderNameFilter) {
+    value = header;
+  }
+  if (!utils$1.isString(value)) return;
+  if (utils$1.isString(filter)) {
+    return value.indexOf(filter) !== -1;
+  }
+  if (utils$1.isRegExp(filter)) {
+    return filter.test(value);
+  }
+}
+function formatHeader(header) {
+  return header.trim().toLowerCase().replace(/([a-z\d])(\w*)/g, (w, char, str) => {
+    return char.toUpperCase() + str;
+  });
+}
+function buildAccessors(obj, header) {
+  const accessorName = utils$1.toCamelCase(' ' + header);
+  ['get', 'set', 'has'].forEach(methodName => {
+    Object.defineProperty(obj, methodName + accessorName, {
+      // Null-proto descriptor so a polluted Object.prototype.get cannot turn
+      // this data descriptor into an accessor descriptor on the way in.
+      __proto__: null,
+      value: function (arg1, arg2, arg3) {
+        return this[methodName].call(this, header, arg1, arg2, arg3);
+      },
+      configurable: true
+    });
+  });
+}
+class AxiosHeaders {
+  constructor(headers) {
+    headers && this.set(headers);
+  }
+  set(header, valueOrRewrite, rewrite) {
+    const self = this;
+    function setHeader(_value, _header, _rewrite) {
+      const lHeader = normalizeHeader(_header);
+      if (!lHeader) {
+        throw new Error('header name must be a non-empty string');
+      }
+      const key = utils$1.findKey(self, lHeader);
+      if (!key || self[key] === undefined || _rewrite === true || _rewrite === undefined && self[key] !== false) {
+        self[key || _header] = normalizeValue(_value);
+      }
+    }
+    const setHeaders = (headers, _rewrite) => utils$1.forEach(headers, (_value, _header) => setHeader(_value, _header, _rewrite));
+    if (utils$1.isPlainObject(header) || header instanceof this.constructor) {
+      setHeaders(header, valueOrRewrite);
+    } else if (utils$1.isString(header) && (header = header.trim()) && !isValidHeaderName(header)) {
+      setHeaders(parseHeaders(header), valueOrRewrite);
+    } else if (utils$1.isObject(header) && utils$1.isIterable(header)) {
+      let obj = {},
+        dest,
+        key;
+      for (const entry of header) {
+        if (!utils$1.isArray(entry)) {
+          throw TypeError('Object iterator must return a key-value pair');
+        }
+        obj[key = entry[0]] = (dest = obj[key]) ? utils$1.isArray(dest) ? [...dest, entry[1]] : [dest, entry[1]] : entry[1];
+      }
+      setHeaders(obj, valueOrRewrite);
+    } else {
+      header != null && setHeader(valueOrRewrite, header, rewrite);
+    }
+    return this;
+  }
+  get(header, parser) {
+    header = normalizeHeader(header);
+    if (header) {
+      const key = utils$1.findKey(this, header);
+      if (key) {
+        const value = this[key];
+        if (!parser) {
+          return value;
+        }
+        if (parser === true) {
+          return parseTokens(value);
+        }
+        if (utils$1.isFunction(parser)) {
+          return parser.call(this, value, key);
+        }
+        if (utils$1.isRegExp(parser)) {
+          return parser.exec(value);
+        }
+        throw new TypeError('parser must be boolean|regexp|function');
+      }
+    }
+  }
+  has(header, matcher) {
+    header = normalizeHeader(header);
+    if (header) {
+      const key = utils$1.findKey(this, header);
+      return !!(key && this[key] !== undefined && (!matcher || matchHeaderValue(this, this[key], key, matcher)));
+    }
+    return false;
+  }
+  delete(header, matcher) {
+    const self = this;
+    let deleted = false;
+    function deleteHeader(_header) {
+      _header = normalizeHeader(_header);
+      if (_header) {
+        const key = utils$1.findKey(self, _header);
+        if (key && (!matcher || matchHeaderValue(self, self[key], key, matcher))) {
+          delete self[key];
+          deleted = true;
+        }
+      }
+    }
+    if (utils$1.isArray(header)) {
+      header.forEach(deleteHeader);
+    } else {
+      deleteHeader(header);
+    }
+    return deleted;
+  }
+  clear(matcher) {
+    const keys = Object.keys(this);
+    let i = keys.length;
+    let deleted = false;
+    while (i--) {
+      const key = keys[i];
+      if (!matcher || matchHeaderValue(this, this[key], key, matcher, true)) {
+        delete this[key];
+        deleted = true;
+      }
+    }
+    return deleted;
+  }
+  normalize(format) {
+    const self = this;
+    const headers = {};
+    utils$1.forEach(this, (value, header) => {
+      const key = utils$1.findKey(headers, header);
+      if (key) {
+        self[key] = normalizeValue(value);
+        delete self[header];
+        return;
+      }
+      const normalized = format ? formatHeader(header) : String(header).trim();
+      if (normalized !== header) {
+        delete self[header];
+      }
+      self[normalized] = normalizeValue(value);
+      headers[normalized] = true;
+    });
+    return this;
+  }
+  concat(...targets) {
+    return this.constructor.concat(this, ...targets);
+  }
+  toJSON(asStrings) {
+    const obj = Object.create(null);
+    utils$1.forEach(this, (value, header) => {
+      value != null && value !== false && (obj[header] = asStrings && utils$1.isArray(value) ? value.join(', ') : value);
+    });
+    return obj;
+  }
+  [Symbol.iterator]() {
+    return Object.entries(this.toJSON())[Symbol.iterator]();
+  }
+  toString() {
+    return Object.entries(this.toJSON()).map(([header, value]) => header + ': ' + value).join('\n');
+  }
+  getSetCookie() {
+    return this.get('set-cookie') || [];
+  }
+  get [Symbol.toStringTag]() {
+    return 'AxiosHeaders';
+  }
+  static from(thing) {
+    return thing instanceof this ? thing : new this(thing);
+  }
+  static concat(first, ...targets) {
+    const computed = new this(first);
+    targets.forEach(target => computed.set(target));
+    return computed;
+  }
+  static accessor(header) {
+    const internals = this[$internals] = this[$internals] = {
+      accessors: {}
+    };
+    const accessors = internals.accessors;
+    const prototype = this.prototype;
+    function defineAccessor(_header) {
+      const lHeader = normalizeHeader(_header);
+      if (!accessors[lHeader]) {
+        buildAccessors(prototype, _header);
+        accessors[lHeader] = true;
+      }
+    }
+    utils$1.isArray(header) ? header.forEach(defineAccessor) : defineAccessor(header);
+    return this;
+  }
+}
+AxiosHeaders.accessor(['Content-Type', 'Content-Length', 'Accept', 'Accept-Encoding', 'User-Agent', 'Authorization']);
+
+// reserved names hotfix
+utils$1.reduceDescriptors(AxiosHeaders.prototype, ({
+  value
+}, key) => {
+  let mapped = key[0].toUpperCase() + key.slice(1); // map `set` => `Set`
+  return {
+    get: () => value,
+    set(headerValue) {
+      this[mapped] = headerValue;
+    }
+  };
+});
+utils$1.freezeMethods(AxiosHeaders);
+
+const REDACTED = '[REDACTED ****]';
+function hasOwnOrPrototypeToJSON(source) {
+  if (utils$1.hasOwnProp(source, 'toJSON')) {
+    return true;
+  }
+  let prototype = Object.getPrototypeOf(source);
+  while (prototype && prototype !== Object.prototype) {
+    if (utils$1.hasOwnProp(prototype, 'toJSON')) {
+      return true;
+    }
+    prototype = Object.getPrototypeOf(prototype);
+  }
+  return false;
+}
+
+// Build a plain-object snapshot of `config` and replace the value of any key
+// (case-insensitive) listed in `redactKeys` with REDACTED. Walks through arrays
+// and AxiosHeaders, and short-circuits on circular references.
+function redactConfig(config, redactKeys) {
+  const lowerKeys = new Set(redactKeys.map(k => String(k).toLowerCase()));
+  const seen = [];
+  const visit = source => {
+    if (source === null || typeof source !== 'object') return source;
+    if (utils$1.isBuffer(source)) return source;
+    if (seen.indexOf(source) !== -1) return undefined;
+    if (source instanceof AxiosHeaders) {
+      source = source.toJSON();
+    }
+    seen.push(source);
+    let result;
+    if (utils$1.isArray(source)) {
+      result = [];
+      source.forEach((v, i) => {
+        const reducedValue = visit(v);
+        if (!utils$1.isUndefined(reducedValue)) {
+          result[i] = reducedValue;
+        }
+      });
+    } else {
+      if (!utils$1.isPlainObject(source) && hasOwnOrPrototypeToJSON(source)) {
+        seen.pop();
+        return source;
+      }
+      result = Object.create(null);
+      for (const [key, value] of Object.entries(source)) {
+        const reducedValue = lowerKeys.has(key.toLowerCase()) ? REDACTED : visit(value);
+        if (!utils$1.isUndefined(reducedValue)) {
+          result[key] = reducedValue;
+        }
+      }
+    }
+    seen.pop();
+    return result;
+  };
+  return visit(config);
+}
+class AxiosError extends Error {
+  static from(error, code, config, request, response, customProps) {
+    const axiosError = new AxiosError(error.message, code || error.code, config, request, response);
+    axiosError.cause = error;
+    axiosError.name = error.name;
+
+    // Preserve status from the original error if not already set from response
+    if (error.status != null && axiosError.status == null) {
+      axiosError.status = error.status;
+    }
+    customProps && Object.assign(axiosError, customProps);
+    return axiosError;
+  }
+
+  /**
+   * Create an Error with the specified message, config, error code, request and response.
+   *
+   * @param {string} message The error message.
+   * @param {string} [code] The error code (for example, 'ECONNABORTED').
+   * @param {Object} [config] The config.
+   * @param {Object} [request] The request.
+   * @param {Object} [response] The response.
+   *
+   * @returns {Error} The created error.
+   */
+  constructor(message, code, config, request, response) {
+    super(message);
+
+    // Make message enumerable to maintain backward compatibility
+    // The native Error constructor sets message as non-enumerable,
+    // but axios < v1.13.3 had it as enumerable
+    Object.defineProperty(this, 'message', {
+      // Null-proto descriptor so a polluted Object.prototype.get cannot turn
+      // this data descriptor into an accessor descriptor on the way in.
+      __proto__: null,
+      value: message,
+      enumerable: true,
+      writable: true,
+      configurable: true
+    });
+    this.name = 'AxiosError';
+    this.isAxiosError = true;
+    code && (this.code = code);
+    config && (this.config = config);
+    request && (this.request = request);
+    if (response) {
+      this.response = response;
+      this.status = response.status;
+    }
+  }
+  toJSON() {
+    // Opt-in redaction: when the request config carries a `redact` array, the
+    // value of any matching key (case-insensitive, at any depth) is replaced
+    // with REDACTED in the serialized snapshot. Undefined or empty leaves the
+    // existing serialization behavior unchanged.
+    const config = this.config;
+    const redactKeys = config && utils$1.hasOwnProp(config, 'redact') ? config.redact : undefined;
+    const serializedConfig = utils$1.isArray(redactKeys) && redactKeys.length > 0 ? redactConfig(config, redactKeys) : utils$1.toJSONObject(config);
     return {
       // Standard
       message: this.message,
@@ -90477,64 +95387,28 @@ utils$1.inherits(AxiosError, Error, {
       columnNumber: this.columnNumber,
       stack: this.stack,
       // Axios
-      config: utils$1.toJSONObject(this.config),
+      config: serializedConfig,
       code: this.code,
       status: this.status
     };
   }
-});
+}
 
-const prototype$1 = AxiosError.prototype;
-const descriptors = {};
-
-[
-  'ERR_BAD_OPTION_VALUE',
-  'ERR_BAD_OPTION',
-  'ECONNABORTED',
-  'ETIMEDOUT',
-  'ERR_NETWORK',
-  'ERR_FR_TOO_MANY_REDIRECTS',
-  'ERR_DEPRECATED',
-  'ERR_BAD_RESPONSE',
-  'ERR_BAD_REQUEST',
-  'ERR_CANCELED',
-  'ERR_NOT_SUPPORT',
-  'ERR_INVALID_URL'
-// eslint-disable-next-line func-names
-].forEach(code => {
-  descriptors[code] = {value: code};
-});
-
-Object.defineProperties(AxiosError, descriptors);
-Object.defineProperty(prototype$1, 'isAxiosError', {value: true});
-
-// eslint-disable-next-line func-names
-AxiosError.from = (error, code, config, request, response, customProps) => {
-  const axiosError = Object.create(prototype$1);
-
-  utils$1.toFlatObject(error, axiosError, function filter(obj) {
-    return obj !== Error.prototype;
-  }, prop => {
-    return prop !== 'isAxiosError';
-  });
-
-  const msg = error && error.message ? error.message : 'Error';
-
-  // Prefer explicit code; otherwise copy the low-level error's code (e.g. ECONNREFUSED)
-  const errCode = code == null && error ? error.code : code;
-  AxiosError.call(axiosError, msg, errCode, config, request, response);
-
-  // Chain the original error on the standard field; non-enumerable to avoid JSON noise
-  if (error && axiosError.cause == null) {
-    Object.defineProperty(axiosError, 'cause', { value: error, configurable: true });
-  }
-
-  axiosError.name = (error && error.name) || 'Error';
-
-  customProps && Object.assign(axiosError, customProps);
-
-  return axiosError;
-};
+// This can be changed to static properties as soon as the parser options in .eslint.cjs are updated.
+AxiosError.ERR_BAD_OPTION_VALUE = 'ERR_BAD_OPTION_VALUE';
+AxiosError.ERR_BAD_OPTION = 'ERR_BAD_OPTION';
+AxiosError.ECONNABORTED = 'ECONNABORTED';
+AxiosError.ETIMEDOUT = 'ETIMEDOUT';
+AxiosError.ECONNREFUSED = 'ECONNREFUSED';
+AxiosError.ERR_NETWORK = 'ERR_NETWORK';
+AxiosError.ERR_FR_TOO_MANY_REDIRECTS = 'ERR_FR_TOO_MANY_REDIRECTS';
+AxiosError.ERR_DEPRECATED = 'ERR_DEPRECATED';
+AxiosError.ERR_BAD_RESPONSE = 'ERR_BAD_RESPONSE';
+AxiosError.ERR_BAD_REQUEST = 'ERR_BAD_REQUEST';
+AxiosError.ERR_CANCELED = 'ERR_CANCELED';
+AxiosError.ERR_NOT_SUPPORT = 'ERR_NOT_SUPPORT';
+AxiosError.ERR_INVALID_URL = 'ERR_INVALID_URL';
+AxiosError.ERR_FORM_DATA_DEPTH_EXCEEDED = 'ERR_FORM_DATA_DEPTH_EXCEEDED';
 
 /**
  * Determines if the given thing is a array or js object.
@@ -90586,7 +95460,6 @@ function renderKey(path, key, dots) {
 function isFlatArray(arr) {
   return utils$1.isArray(arr) && !arr.some(isVisitable);
 }
-
 const predicates = utils$1.toFlatObject(utils$1, {}, null, function filter(prop) {
   return /^is[A-Z]/.test(prop);
 });
@@ -90620,7 +95493,7 @@ function toFormData(obj, formData, options) {
   }
 
   // eslint-disable-next-line no-param-reassign
-  formData = formData || new (FormData__default["default"] || FormData)();
+  formData = formData || new (FormData$1 || FormData)();
 
   // eslint-disable-next-line no-param-reassign
   options = utils$1.toFlatObject(options, {
@@ -90631,38 +95504,31 @@ function toFormData(obj, formData, options) {
     // eslint-disable-next-line no-eq-null,eqeqeq
     return !utils$1.isUndefined(source[option]);
   });
-
   const metaTokens = options.metaTokens;
   // eslint-disable-next-line no-use-before-define
   const visitor = options.visitor || defaultVisitor;
   const dots = options.dots;
   const indexes = options.indexes;
   const _Blob = options.Blob || typeof Blob !== 'undefined' && Blob;
+  const maxDepth = options.maxDepth === undefined ? 100 : options.maxDepth;
   const useBlob = _Blob && utils$1.isSpecCompliantForm(formData);
-
   if (!utils$1.isFunction(visitor)) {
     throw new TypeError('visitor must be a function');
   }
-
   function convertValue(value) {
     if (value === null) return '';
-
     if (utils$1.isDate(value)) {
       return value.toISOString();
     }
-
     if (utils$1.isBoolean(value)) {
       return value.toString();
     }
-
     if (!useBlob && utils$1.isBlob(value)) {
       throw new AxiosError('Blob is not supported. Use a Buffer instead.');
     }
-
     if (utils$1.isArrayBuffer(value) || utils$1.isTypedArray(value)) {
       return useBlob && typeof Blob === 'function' ? new Blob([value]) : Buffer.from(value);
     }
-
     return value;
   }
 
@@ -90678,76 +95544,60 @@ function toFormData(obj, formData, options) {
    */
   function defaultVisitor(value, key, path) {
     let arr = value;
-
+    if (utils$1.isReactNative(formData) && utils$1.isReactNativeBlob(value)) {
+      formData.append(renderKey(path, key, dots), convertValue(value));
+      return false;
+    }
     if (value && !path && typeof value === 'object') {
       if (utils$1.endsWith(key, '{}')) {
         // eslint-disable-next-line no-param-reassign
         key = metaTokens ? key : key.slice(0, -2);
         // eslint-disable-next-line no-param-reassign
         value = JSON.stringify(value);
-      } else if (
-        (utils$1.isArray(value) && isFlatArray(value)) ||
-        ((utils$1.isFileList(value) || utils$1.endsWith(key, '[]')) && (arr = utils$1.toArray(value))
-        )) {
+      } else if (utils$1.isArray(value) && isFlatArray(value) || (utils$1.isFileList(value) || utils$1.endsWith(key, '[]')) && (arr = utils$1.toArray(value))) {
         // eslint-disable-next-line no-param-reassign
         key = removeBrackets(key);
-
         arr.forEach(function each(el, index) {
           !(utils$1.isUndefined(el) || el === null) && formData.append(
-            // eslint-disable-next-line no-nested-ternary
-            indexes === true ? renderKey([key], index, dots) : (indexes === null ? key : key + '[]'),
-            convertValue(el)
-          );
+          // eslint-disable-next-line no-nested-ternary
+          indexes === true ? renderKey([key], index, dots) : indexes === null ? key : key + '[]', convertValue(el));
         });
         return false;
       }
     }
-
     if (isVisitable(value)) {
       return true;
     }
-
     formData.append(renderKey(path, key, dots), convertValue(value));
-
     return false;
   }
-
   const stack = [];
-
   const exposedHelpers = Object.assign(predicates, {
     defaultVisitor,
     convertValue,
     isVisitable
   });
-
-  function build(value, path) {
+  function build(value, path, depth = 0) {
     if (utils$1.isUndefined(value)) return;
-
+    if (depth > maxDepth) {
+      throw new AxiosError('Object is too deeply nested (' + depth + ' levels). Max depth: ' + maxDepth, AxiosError.ERR_FORM_DATA_DEPTH_EXCEEDED);
+    }
     if (stack.indexOf(value) !== -1) {
       throw Error('Circular reference detected in ' + path.join('.'));
     }
-
     stack.push(value);
-
     utils$1.forEach(value, function each(el, key) {
-      const result = !(utils$1.isUndefined(el) || el === null) && visitor.call(
-        formData, el, utils$1.isString(key) ? key.trim() : key, path, exposedHelpers
-      );
-
+      const result = !(utils$1.isUndefined(el) || el === null) && visitor.call(formData, el, utils$1.isString(key) ? key.trim() : key, path, exposedHelpers);
       if (result === true) {
-        build(el, path ? path.concat(key) : [key]);
+        build(el, path ? path.concat(key) : [key], depth + 1);
       }
     });
-
     stack.pop();
   }
-
   if (!utils$1.isObject(obj)) {
     throw new TypeError('data must be an object');
   }
-
   build(obj);
-
   return formData;
 }
 
@@ -90766,10 +95616,9 @@ function encode$1(str) {
     '(': '%28',
     ')': '%29',
     '~': '%7E',
-    '%20': '+',
-    '%00': '\x00'
+    '%20': '+'
   };
-  return encodeURIComponent(str).replace(/[!'()~]|%20|%00/g, function replacer(match) {
+  return encodeURIComponent(str).replace(/[!'()~]|%20/g, function replacer(match) {
     return charMap[match];
   });
 }
@@ -90784,40 +95633,31 @@ function encode$1(str) {
  */
 function AxiosURLSearchParams(params, options) {
   this._pairs = [];
-
   params && toFormData(params, this, options);
 }
-
 const prototype = AxiosURLSearchParams.prototype;
-
 prototype.append = function append(name, value) {
   this._pairs.push([name, value]);
 };
-
 prototype.toString = function toString(encoder) {
-  const _encode = encoder ? function(value) {
+  const _encode = encoder ? function (value) {
     return encoder.call(this, value, encode$1);
   } : encode$1;
-
   return this._pairs.map(function each(pair) {
     return _encode(pair[0]) + '=' + _encode(pair[1]);
   }, '').join('&');
 };
 
 /**
- * It replaces all instances of the characters `:`, `$`, `,`, `+`, `[`, and `]` with their
- * URI encoded counterparts
+ * It replaces URL-encoded forms of `:`, `$`, `,`, and spaces with
+ * their plain counterparts (`:`, `$`, `,`, `+`).
  *
  * @param {string} val The value to be encoded.
  *
  * @returns {string} The encoded value.
  */
 function encode(val) {
-  return encodeURIComponent(val).
-    replace(/%3A/gi, ':').
-    replace(/%24/g, '$').
-    replace(/%2C/gi, ',').
-    replace(/%20/g, '+');
+  return encodeURIComponent(val).replace(/%3A/gi, ':').replace(/%24/g, '$').replace(/%2C/gi, ',').replace(/%20/g, '+');
 }
 
 /**
@@ -90830,40 +95670,27 @@ function encode(val) {
  * @returns {string} The formatted url
  */
 function buildURL(url, params, options) {
-  /*eslint no-param-reassign:0*/
   if (!params) {
     return url;
   }
-  
   const _encode = options && options.encode || encode;
-
-  if (utils$1.isFunction(options)) {
-    options = {
-      serialize: options
-    };
-  } 
-
-  const serializeFn = options && options.serialize;
-
+  const _options = utils$1.isFunction(options) ? {
+    serialize: options
+  } : options;
+  const serializeFn = _options && _options.serialize;
   let serializedParams;
-
   if (serializeFn) {
-    serializedParams = serializeFn(params, options);
+    serializedParams = serializeFn(params, _options);
   } else {
-    serializedParams = utils$1.isURLSearchParams(params) ?
-      params.toString() :
-      new AxiosURLSearchParams(params, options).toString(_encode);
+    serializedParams = utils$1.isURLSearchParams(params) ? params.toString() : new AxiosURLSearchParams(params, _options).toString(_encode);
   }
-
   if (serializedParams) {
-    const hashmarkIndex = url.indexOf("#");
-
+    const hashmarkIndex = url.indexOf('#');
     if (hashmarkIndex !== -1) {
       url = url.slice(0, hashmarkIndex);
     }
     url += (url.indexOf('?') === -1 ? '?' : '&') + serializedParams;
   }
-
   return url;
 }
 
@@ -90877,6 +95704,7 @@ class InterceptorManager {
    *
    * @param {Function} fulfilled The function to handle `then` for a `Promise`
    * @param {Function} rejected The function to handle `reject` for a `Promise`
+   * @param {Object} options The options for the interceptor, synchronous and runWhen
    *
    * @return {Number} An ID used to remove interceptor later
    */
@@ -90933,53 +95761,47 @@ class InterceptorManager {
   }
 }
 
-const InterceptorManager$1 = InterceptorManager;
-
-const transitionalDefaults = {
+var transitionalDefaults = {
   silentJSONParsing: true,
   forcedJSONParsing: true,
-  clarifyTimeoutError: false
+  clarifyTimeoutError: false,
+  legacyInterceptorReqResOrdering: true
 };
 
-const URLSearchParams = url__default["default"].URLSearchParams;
+var URLSearchParams = url.URLSearchParams;
 
 const ALPHA = 'abcdefghijklmnopqrstuvwxyz';
-
 const DIGIT = '0123456789';
-
 const ALPHABET = {
   DIGIT,
   ALPHA,
   ALPHA_DIGIT: ALPHA + ALPHA.toUpperCase() + DIGIT
 };
-
 const generateString = (size = 16, alphabet = ALPHABET.ALPHA_DIGIT) => {
   let str = '';
-  const {length} = alphabet;
+  const {
+    length
+  } = alphabet;
   const randomValues = new Uint32Array(size);
-  crypto__default["default"].randomFillSync(randomValues);
+  crypto.randomFillSync(randomValues);
   for (let i = 0; i < size; i++) {
     str += alphabet[randomValues[i] % length];
   }
-
   return str;
 };
-
-
-const platform$1 = {
+var platform$1 = {
   isNode: true,
   classes: {
     URLSearchParams,
-    FormData: FormData__default["default"],
+    FormData: FormData$1,
     Blob: typeof Blob !== 'undefined' && Blob || null
   },
   ALPHABET,
   generateString,
-  protocols: [ 'http', 'https', 'file', 'data' ]
+  protocols: ['http', 'https', 'file', 'data']
 };
 
 const hasBrowserEnv = typeof window !== 'undefined' && typeof document !== 'undefined';
-
 const _navigator = typeof navigator === 'object' && navigator || undefined;
 
 /**
@@ -90999,8 +95821,7 @@ const _navigator = typeof navigator === 'object' && navigator || undefined;
  *
  * @returns {boolean}
  */
-const hasStandardBrowserEnv = hasBrowserEnv &&
-  (!_navigator || ['ReactNative', 'NativeScript', 'NS'].indexOf(_navigator.product) < 0);
+const hasStandardBrowserEnv = hasBrowserEnv && (!_navigator || ['ReactNative', 'NativeScript', 'NS'].indexOf(_navigator.product) < 0);
 
 /**
  * Determine if we're running in a standard browser webWorker environment
@@ -91012,38 +95833,33 @@ const hasStandardBrowserEnv = hasBrowserEnv &&
  * This leads to a problem when axios post `FormData` in webWorker
  */
 const hasStandardBrowserWebWorkerEnv = (() => {
-  return (
-    typeof WorkerGlobalScope !== 'undefined' &&
-    // eslint-disable-next-line no-undef
-    self instanceof WorkerGlobalScope &&
-    typeof self.importScripts === 'function'
-  );
+  return typeof WorkerGlobalScope !== 'undefined' &&
+  // eslint-disable-next-line no-undef
+  self instanceof WorkerGlobalScope && typeof self.importScripts === 'function';
 })();
-
 const origin = hasBrowserEnv && window.location.href || 'http://localhost';
 
-const utils = /*#__PURE__*/Object.freeze({
+var utils = /*#__PURE__*/Object.freeze({
   __proto__: null,
   hasBrowserEnv: hasBrowserEnv,
-  hasStandardBrowserWebWorkerEnv: hasStandardBrowserWebWorkerEnv,
   hasStandardBrowserEnv: hasStandardBrowserEnv,
+  hasStandardBrowserWebWorkerEnv: hasStandardBrowserWebWorkerEnv,
   navigator: _navigator,
   origin: origin
 });
 
-const platform = {
+var platform = {
   ...utils,
   ...platform$1
 };
 
 function toURLEncodedForm(data, options) {
   return toFormData(data, new platform.classes.URLSearchParams(), {
-    visitor: function(value, key, path, helpers) {
+    visitor: function (value, key, path, helpers) {
       if (platform.isNode && utils$1.isBuffer(value)) {
         this.append(key, value.toString('base64'));
         return false;
       }
-
       return helpers.defaultVisitor.apply(this, arguments);
     },
     ...options
@@ -91097,48 +95913,38 @@ function arrayToObject(arr) {
 function formDataToJSON(formData) {
   function buildPath(path, value, target, index) {
     let name = path[index++];
-
     if (name === '__proto__') return true;
-
     const isNumericKey = Number.isFinite(+name);
     const isLast = index >= path.length;
     name = !name && utils$1.isArray(target) ? target.length : name;
-
     if (isLast) {
       if (utils$1.hasOwnProp(target, name)) {
-        target[name] = [target[name], value];
+        target[name] = utils$1.isArray(target[name]) ? target[name].concat(value) : [target[name], value];
       } else {
         target[name] = value;
       }
-
       return !isNumericKey;
     }
-
-    if (!target[name] || !utils$1.isObject(target[name])) {
+    if (!utils$1.hasOwnProp(target, name) || !utils$1.isObject(target[name])) {
       target[name] = [];
     }
-
     const result = buildPath(path, value, target[name], index);
-
     if (result && utils$1.isArray(target[name])) {
       target[name] = arrayToObject(target[name]);
     }
-
     return !isNumericKey;
   }
-
   if (utils$1.isFormData(formData) && utils$1.isFunction(formData.entries)) {
     const obj = {};
-
     utils$1.forEachEntry(formData, (name, value) => {
       buildPath(parsePropPath(name), value, obj, 0);
     });
-
     return obj;
   }
-
   return null;
 }
+
+const own = (obj, key) => obj != null && utils$1.hasOwnProp(obj, key) ? obj[key] : undefined;
 
 /**
  * It takes a string, tries to parse it, and if it fails, it returns the stringified version
@@ -91161,38 +95967,23 @@ function stringifySafely(rawValue, parser, encoder) {
       }
     }
   }
-
   return (encoder || JSON.stringify)(rawValue);
 }
-
 const defaults = {
-
   transitional: transitionalDefaults,
-
   adapter: ['xhr', 'http', 'fetch'],
-
   transformRequest: [function transformRequest(data, headers) {
     const contentType = headers.getContentType() || '';
     const hasJSONContentType = contentType.indexOf('application/json') > -1;
     const isObjectPayload = utils$1.isObject(data);
-
     if (isObjectPayload && utils$1.isHTMLForm(data)) {
       data = new FormData(data);
     }
-
     const isFormData = utils$1.isFormData(data);
-
     if (isFormData) {
       return hasJSONContentType ? JSON.stringify(formDataToJSON(data)) : data;
     }
-
-    if (utils$1.isArrayBuffer(data) ||
-      utils$1.isBuffer(data) ||
-      utils$1.isStream(data) ||
-      utils$1.isFile(data) ||
-      utils$1.isBlob(data) ||
-      utils$1.isReadableStream(data)
-    ) {
+    if (utils$1.isArrayBuffer(data) || utils$1.isBuffer(data) || utils$1.isStream(data) || utils$1.isFile(data) || utils$1.isBlob(data) || utils$1.isReadableStream(data)) {
       return data;
     }
     if (utils$1.isArrayBufferView(data)) {
@@ -91202,457 +95993,76 @@ const defaults = {
       headers.setContentType('application/x-www-form-urlencoded;charset=utf-8', false);
       return data.toString();
     }
-
     let isFileList;
-
     if (isObjectPayload) {
+      const formSerializer = own(this, 'formSerializer');
       if (contentType.indexOf('application/x-www-form-urlencoded') > -1) {
-        return toURLEncodedForm(data, this.formSerializer).toString();
+        return toURLEncodedForm(data, formSerializer).toString();
       }
-
       if ((isFileList = utils$1.isFileList(data)) || contentType.indexOf('multipart/form-data') > -1) {
-        const _FormData = this.env && this.env.FormData;
-
-        return toFormData(
-          isFileList ? {'files[]': data} : data,
-          _FormData && new _FormData(),
-          this.formSerializer
-        );
+        const env = own(this, 'env');
+        const _FormData = env && env.FormData;
+        return toFormData(isFileList ? {
+          'files[]': data
+        } : data, _FormData && new _FormData(), formSerializer);
       }
     }
-
-    if (isObjectPayload || hasJSONContentType ) {
+    if (isObjectPayload || hasJSONContentType) {
       headers.setContentType('application/json', false);
       return stringifySafely(data);
     }
-
     return data;
   }],
-
   transformResponse: [function transformResponse(data) {
-    const transitional = this.transitional || defaults.transitional;
+    const transitional = own(this, 'transitional') || defaults.transitional;
     const forcedJSONParsing = transitional && transitional.forcedJSONParsing;
-    const JSONRequested = this.responseType === 'json';
-
+    const responseType = own(this, 'responseType');
+    const JSONRequested = responseType === 'json';
     if (utils$1.isResponse(data) || utils$1.isReadableStream(data)) {
       return data;
     }
-
-    if (data && utils$1.isString(data) && ((forcedJSONParsing && !this.responseType) || JSONRequested)) {
+    if (data && utils$1.isString(data) && (forcedJSONParsing && !responseType || JSONRequested)) {
       const silentJSONParsing = transitional && transitional.silentJSONParsing;
       const strictJSONParsing = !silentJSONParsing && JSONRequested;
-
       try {
-        return JSON.parse(data, this.parseReviver);
+        return JSON.parse(data, own(this, 'parseReviver'));
       } catch (e) {
         if (strictJSONParsing) {
           if (e.name === 'SyntaxError') {
-            throw AxiosError.from(e, AxiosError.ERR_BAD_RESPONSE, this, null, this.response);
+            throw AxiosError.from(e, AxiosError.ERR_BAD_RESPONSE, this, null, own(this, 'response'));
           }
           throw e;
         }
       }
     }
-
     return data;
   }],
-
   /**
    * A timeout in milliseconds to abort a request. If set to 0 (default) a
    * timeout is not created.
    */
   timeout: 0,
-
   xsrfCookieName: 'XSRF-TOKEN',
   xsrfHeaderName: 'X-XSRF-TOKEN',
-
   maxContentLength: -1,
   maxBodyLength: -1,
-
   env: {
     FormData: platform.classes.FormData,
     Blob: platform.classes.Blob
   },
-
   validateStatus: function validateStatus(status) {
     return status >= 200 && status < 300;
   },
-
   headers: {
     common: {
-      'Accept': 'application/json, text/plain, */*',
+      Accept: 'application/json, text/plain, */*',
       'Content-Type': undefined
     }
   }
 };
-
-utils$1.forEach(['delete', 'get', 'head', 'post', 'put', 'patch'], (method) => {
+utils$1.forEach(['delete', 'get', 'head', 'post', 'put', 'patch', 'query'], method => {
   defaults.headers[method] = {};
 });
-
-const defaults$1 = defaults;
-
-// RawAxiosHeaders whose duplicates are ignored by node
-// c.f. https://nodejs.org/api/http.html#http_message_headers
-const ignoreDuplicateOf = utils$1.toObjectSet([
-  'age', 'authorization', 'content-length', 'content-type', 'etag',
-  'expires', 'from', 'host', 'if-modified-since', 'if-unmodified-since',
-  'last-modified', 'location', 'max-forwards', 'proxy-authorization',
-  'referer', 'retry-after', 'user-agent'
-]);
-
-/**
- * Parse headers into an object
- *
- * ```
- * Date: Wed, 27 Aug 2014 08:58:49 GMT
- * Content-Type: application/json
- * Connection: keep-alive
- * Transfer-Encoding: chunked
- * ```
- *
- * @param {String} rawHeaders Headers needing to be parsed
- *
- * @returns {Object} Headers parsed into an object
- */
-const parseHeaders = rawHeaders => {
-  const parsed = {};
-  let key;
-  let val;
-  let i;
-
-  rawHeaders && rawHeaders.split('\n').forEach(function parser(line) {
-    i = line.indexOf(':');
-    key = line.substring(0, i).trim().toLowerCase();
-    val = line.substring(i + 1).trim();
-
-    if (!key || (parsed[key] && ignoreDuplicateOf[key])) {
-      return;
-    }
-
-    if (key === 'set-cookie') {
-      if (parsed[key]) {
-        parsed[key].push(val);
-      } else {
-        parsed[key] = [val];
-      }
-    } else {
-      parsed[key] = parsed[key] ? parsed[key] + ', ' + val : val;
-    }
-  });
-
-  return parsed;
-};
-
-const $internals = Symbol('internals');
-
-function normalizeHeader(header) {
-  return header && String(header).trim().toLowerCase();
-}
-
-function normalizeValue(value) {
-  if (value === false || value == null) {
-    return value;
-  }
-
-  return utils$1.isArray(value) ? value.map(normalizeValue) : String(value);
-}
-
-function parseTokens(str) {
-  const tokens = Object.create(null);
-  const tokensRE = /([^\s,;=]+)\s*(?:=\s*([^,;]+))?/g;
-  let match;
-
-  while ((match = tokensRE.exec(str))) {
-    tokens[match[1]] = match[2];
-  }
-
-  return tokens;
-}
-
-const isValidHeaderName = (str) => /^[-_a-zA-Z0-9^`|~,!#$%&'*+.]+$/.test(str.trim());
-
-function matchHeaderValue(context, value, header, filter, isHeaderNameFilter) {
-  if (utils$1.isFunction(filter)) {
-    return filter.call(this, value, header);
-  }
-
-  if (isHeaderNameFilter) {
-    value = header;
-  }
-
-  if (!utils$1.isString(value)) return;
-
-  if (utils$1.isString(filter)) {
-    return value.indexOf(filter) !== -1;
-  }
-
-  if (utils$1.isRegExp(filter)) {
-    return filter.test(value);
-  }
-}
-
-function formatHeader(header) {
-  return header.trim()
-    .toLowerCase().replace(/([a-z\d])(\w*)/g, (w, char, str) => {
-      return char.toUpperCase() + str;
-    });
-}
-
-function buildAccessors(obj, header) {
-  const accessorName = utils$1.toCamelCase(' ' + header);
-
-  ['get', 'set', 'has'].forEach(methodName => {
-    Object.defineProperty(obj, methodName + accessorName, {
-      value: function(arg1, arg2, arg3) {
-        return this[methodName].call(this, header, arg1, arg2, arg3);
-      },
-      configurable: true
-    });
-  });
-}
-
-class AxiosHeaders {
-  constructor(headers) {
-    headers && this.set(headers);
-  }
-
-  set(header, valueOrRewrite, rewrite) {
-    const self = this;
-
-    function setHeader(_value, _header, _rewrite) {
-      const lHeader = normalizeHeader(_header);
-
-      if (!lHeader) {
-        throw new Error('header name must be a non-empty string');
-      }
-
-      const key = utils$1.findKey(self, lHeader);
-
-      if(!key || self[key] === undefined || _rewrite === true || (_rewrite === undefined && self[key] !== false)) {
-        self[key || _header] = normalizeValue(_value);
-      }
-    }
-
-    const setHeaders = (headers, _rewrite) =>
-      utils$1.forEach(headers, (_value, _header) => setHeader(_value, _header, _rewrite));
-
-    if (utils$1.isPlainObject(header) || header instanceof this.constructor) {
-      setHeaders(header, valueOrRewrite);
-    } else if(utils$1.isString(header) && (header = header.trim()) && !isValidHeaderName(header)) {
-      setHeaders(parseHeaders(header), valueOrRewrite);
-    } else if (utils$1.isObject(header) && utils$1.isIterable(header)) {
-      let obj = {}, dest, key;
-      for (const entry of header) {
-        if (!utils$1.isArray(entry)) {
-          throw TypeError('Object iterator must return a key-value pair');
-        }
-
-        obj[key = entry[0]] = (dest = obj[key]) ?
-          (utils$1.isArray(dest) ? [...dest, entry[1]] : [dest, entry[1]]) : entry[1];
-      }
-
-      setHeaders(obj, valueOrRewrite);
-    } else {
-      header != null && setHeader(valueOrRewrite, header, rewrite);
-    }
-
-    return this;
-  }
-
-  get(header, parser) {
-    header = normalizeHeader(header);
-
-    if (header) {
-      const key = utils$1.findKey(this, header);
-
-      if (key) {
-        const value = this[key];
-
-        if (!parser) {
-          return value;
-        }
-
-        if (parser === true) {
-          return parseTokens(value);
-        }
-
-        if (utils$1.isFunction(parser)) {
-          return parser.call(this, value, key);
-        }
-
-        if (utils$1.isRegExp(parser)) {
-          return parser.exec(value);
-        }
-
-        throw new TypeError('parser must be boolean|regexp|function');
-      }
-    }
-  }
-
-  has(header, matcher) {
-    header = normalizeHeader(header);
-
-    if (header) {
-      const key = utils$1.findKey(this, header);
-
-      return !!(key && this[key] !== undefined && (!matcher || matchHeaderValue(this, this[key], key, matcher)));
-    }
-
-    return false;
-  }
-
-  delete(header, matcher) {
-    const self = this;
-    let deleted = false;
-
-    function deleteHeader(_header) {
-      _header = normalizeHeader(_header);
-
-      if (_header) {
-        const key = utils$1.findKey(self, _header);
-
-        if (key && (!matcher || matchHeaderValue(self, self[key], key, matcher))) {
-          delete self[key];
-
-          deleted = true;
-        }
-      }
-    }
-
-    if (utils$1.isArray(header)) {
-      header.forEach(deleteHeader);
-    } else {
-      deleteHeader(header);
-    }
-
-    return deleted;
-  }
-
-  clear(matcher) {
-    const keys = Object.keys(this);
-    let i = keys.length;
-    let deleted = false;
-
-    while (i--) {
-      const key = keys[i];
-      if(!matcher || matchHeaderValue(this, this[key], key, matcher, true)) {
-        delete this[key];
-        deleted = true;
-      }
-    }
-
-    return deleted;
-  }
-
-  normalize(format) {
-    const self = this;
-    const headers = {};
-
-    utils$1.forEach(this, (value, header) => {
-      const key = utils$1.findKey(headers, header);
-
-      if (key) {
-        self[key] = normalizeValue(value);
-        delete self[header];
-        return;
-      }
-
-      const normalized = format ? formatHeader(header) : String(header).trim();
-
-      if (normalized !== header) {
-        delete self[header];
-      }
-
-      self[normalized] = normalizeValue(value);
-
-      headers[normalized] = true;
-    });
-
-    return this;
-  }
-
-  concat(...targets) {
-    return this.constructor.concat(this, ...targets);
-  }
-
-  toJSON(asStrings) {
-    const obj = Object.create(null);
-
-    utils$1.forEach(this, (value, header) => {
-      value != null && value !== false && (obj[header] = asStrings && utils$1.isArray(value) ? value.join(', ') : value);
-    });
-
-    return obj;
-  }
-
-  [Symbol.iterator]() {
-    return Object.entries(this.toJSON())[Symbol.iterator]();
-  }
-
-  toString() {
-    return Object.entries(this.toJSON()).map(([header, value]) => header + ': ' + value).join('\n');
-  }
-
-  getSetCookie() {
-    return this.get("set-cookie") || [];
-  }
-
-  get [Symbol.toStringTag]() {
-    return 'AxiosHeaders';
-  }
-
-  static from(thing) {
-    return thing instanceof this ? thing : new this(thing);
-  }
-
-  static concat(first, ...targets) {
-    const computed = new this(first);
-
-    targets.forEach((target) => computed.set(target));
-
-    return computed;
-  }
-
-  static accessor(header) {
-    const internals = this[$internals] = (this[$internals] = {
-      accessors: {}
-    });
-
-    const accessors = internals.accessors;
-    const prototype = this.prototype;
-
-    function defineAccessor(_header) {
-      const lHeader = normalizeHeader(_header);
-
-      if (!accessors[lHeader]) {
-        buildAccessors(prototype, _header);
-        accessors[lHeader] = true;
-      }
-    }
-
-    utils$1.isArray(header) ? header.forEach(defineAccessor) : defineAccessor(header);
-
-    return this;
-  }
-}
-
-AxiosHeaders.accessor(['Content-Type', 'Content-Length', 'Accept', 'Accept-Encoding', 'User-Agent', 'Authorization']);
-
-// reserved names hotfix
-utils$1.reduceDescriptors(AxiosHeaders.prototype, ({value}, key) => {
-  let mapped = key[0].toUpperCase() + key.slice(1); // map `set` => `Set`
-  return {
-    get: () => value,
-    set(headerValue) {
-      this[mapped] = headerValue;
-    }
-  }
-});
-
-utils$1.freezeMethods(AxiosHeaders);
-
-const AxiosHeaders$1 = AxiosHeaders;
 
 /**
  * Transform the data for a request or a response
@@ -91663,17 +96073,14 @@ const AxiosHeaders$1 = AxiosHeaders;
  * @returns {*} The resulting transformed data
  */
 function transformData(fns, response) {
-  const config = this || defaults$1;
+  const config = this || defaults;
   const context = response || config;
-  const headers = AxiosHeaders$1.from(context.headers);
+  const headers = AxiosHeaders.from(context.headers);
   let data = context.data;
-
   utils$1.forEach(fns, function transform(fn) {
     data = fn.call(config, data, headers.normalize(), response ? response.status : undefined);
   });
-
   headers.normalize();
-
   return data;
 }
 
@@ -91681,24 +96088,22 @@ function isCancel(value) {
   return !!(value && value.__CANCEL__);
 }
 
-/**
- * A `CanceledError` is an object that is thrown when an operation is canceled.
- *
- * @param {string=} message The message.
- * @param {Object=} config The config.
- * @param {Object=} request The request.
- *
- * @returns {CanceledError} The created error.
- */
-function CanceledError(message, config, request) {
-  // eslint-disable-next-line no-eq-null,eqeqeq
-  AxiosError.call(this, message == null ? 'canceled' : message, AxiosError.ERR_CANCELED, config, request);
-  this.name = 'CanceledError';
+class CanceledError extends AxiosError {
+  /**
+   * A `CanceledError` is an object that is thrown when an operation is canceled.
+   *
+   * @param {string=} message The message.
+   * @param {Object=} config The config.
+   * @param {Object=} request The request.
+   *
+   * @returns {CanceledError} The created error.
+   */
+  constructor(message, config, request) {
+    super(message == null ? 'canceled' : message, AxiosError.ERR_CANCELED, config, request);
+    this.name = 'CanceledError';
+    this.__CANCEL__ = true;
+  }
 }
-
-utils$1.inherits(CanceledError, AxiosError, {
-  __CANCEL__: true
-});
 
 /**
  * Resolve or reject a Promise based on response status.
@@ -91714,13 +96119,7 @@ function settle(resolve, reject, response) {
   if (!response.status || !validateStatus || validateStatus(response.status)) {
     resolve(response);
   } else {
-    reject(new AxiosError(
-      'Request failed with status code ' + response.status,
-      [AxiosError.ERR_BAD_REQUEST, AxiosError.ERR_BAD_RESPONSE][Math.floor(response.status / 100) - 4],
-      response.config,
-      response.request,
-      response
-    ));
+    reject(new AxiosError('Request failed with status code ' + response.status, response.status >= 400 && response.status < 500 ? AxiosError.ERR_BAD_REQUEST : AxiosError.ERR_BAD_RESPONSE, response.config, response.request, response));
   }
 }
 
@@ -91735,6 +96134,9 @@ function isAbsoluteURL(url) {
   // A URL is considered absolute if it begins with "<scheme>://" or "//" (protocol-relative URL).
   // RFC 3986 defines scheme name as a sequence of characters beginning with a letter and followed
   // by any combination of letters, digits, plus, period, or hyphen.
+  if (typeof url !== 'string') {
+    return false;
+  }
   return /^([a-z][a-z\d+\-.]*:)?\/\//i.test(url);
 }
 
@@ -91747,9 +96149,7 @@ function isAbsoluteURL(url) {
  * @returns {string} The combined URL
  */
 function combineURLs(baseURL, relativeURL) {
-  return relativeURL
-    ? baseURL.replace(/\/?\/$/, '') + '/' + relativeURL.replace(/^\/+/, '')
-    : baseURL;
+  return relativeURL ? baseURL.replace(/\/?\/$/, '') + '/' + relativeURL.replace(/^\/+/, '') : baseURL;
 }
 
 /**
@@ -91764,20 +96164,118 @@ function combineURLs(baseURL, relativeURL) {
  */
 function buildFullPath(baseURL, requestedURL, allowAbsoluteUrls) {
   let isRelativeUrl = !isAbsoluteURL(requestedURL);
-  if (baseURL && (isRelativeUrl || allowAbsoluteUrls == false)) {
+  if (baseURL && (isRelativeUrl || allowAbsoluteUrls === false)) {
     return combineURLs(baseURL, requestedURL);
   }
   return requestedURL;
 }
 
-const VERSION = "1.13.2";
+var DEFAULT_PORTS$1 = {
+  ftp: 21,
+  gopher: 70,
+  http: 80,
+  https: 443,
+  ws: 80,
+  wss: 443
+};
+function parseUrl(urlString) {
+  try {
+    return new URL(urlString);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {string|object|URL} url - The URL as a string or URL instance, or a
+ *   compatible object (such as the result from legacy url.parse).
+ * @return {string} The URL of the proxy that should handle the request to the
+ *  given URL. If no proxy is set, this will be an empty string.
+ */
+function getProxyForUrl(url) {
+  var parsedUrl = (typeof url === 'string' ? parseUrl(url) : url) || {};
+  var proto = parsedUrl.protocol;
+  var hostname = parsedUrl.host;
+  var port = parsedUrl.port;
+  if (typeof hostname !== 'string' || !hostname || typeof proto !== 'string') {
+    return ''; // Don't proxy URLs without a valid scheme or host.
+  }
+  proto = proto.split(':', 1)[0];
+  // Stripping ports in this way instead of using parsedUrl.hostname to make
+  // sure that the brackets around IPv6 addresses are kept.
+  hostname = hostname.replace(/:\d*$/, '');
+  port = parseInt(port) || DEFAULT_PORTS$1[proto] || 0;
+  if (!shouldProxy(hostname, port)) {
+    return ''; // Don't proxy URLs that match NO_PROXY.
+  }
+  var proxy = getEnv(proto + '_proxy') || getEnv('all_proxy');
+  if (proxy && proxy.indexOf('://') === -1) {
+    // Missing scheme in proxy, default to the requested URL's scheme.
+    proxy = proto + '://' + proxy;
+  }
+  return proxy;
+}
+
+/**
+ * Determines whether a given URL should be proxied.
+ *
+ * @param {string} hostname - The host name of the URL.
+ * @param {number} port - The effective port of the URL.
+ * @returns {boolean} Whether the given URL should be proxied.
+ * @private
+ */
+function shouldProxy(hostname, port) {
+  var NO_PROXY = getEnv('no_proxy').toLowerCase();
+  if (!NO_PROXY) {
+    return true; // Always proxy if NO_PROXY is not set.
+  }
+  if (NO_PROXY === '*') {
+    return false; // Never proxy if wildcard is set.
+  }
+  return NO_PROXY.split(/[,\s]/).every(function (proxy) {
+    if (!proxy) {
+      return true; // Skip zero-length hosts.
+    }
+    var parsedProxy = proxy.match(/^(.+):(\d+)$/);
+    var parsedProxyHostname = parsedProxy ? parsedProxy[1] : proxy;
+    var parsedProxyPort = parsedProxy ? parseInt(parsedProxy[2]) : 0;
+    if (parsedProxyPort && parsedProxyPort !== port) {
+      return true; // Skip if ports don't match.
+    }
+    if (!/^[.*]/.test(parsedProxyHostname)) {
+      // No wildcards, so stop proxying if there is an exact match.
+      return hostname !== parsedProxyHostname;
+    }
+    if (parsedProxyHostname.charAt(0) === '*') {
+      // Remove leading wildcard.
+      parsedProxyHostname = parsedProxyHostname.slice(1);
+    }
+    // Stop proxying if the hostname ends with the no_proxy host.
+    return !hostname.endsWith(parsedProxyHostname);
+  });
+}
+
+/**
+ * Get the value for an environment variable.
+ *
+ * @param {string} key - The name of the environment variable.
+ * @return {string} The value of the environment variable.
+ * @private
+ */
+function getEnv(key) {
+  return process.env[key.toLowerCase()] || process.env[key.toUpperCase()] || '';
+}
+
+const VERSION = "1.16.1";
 
 function parseProtocol(url) {
-  const match = /^([-+\w]{1,25})(:?\/\/|:)/.exec(url);
+  const match = /^([-+\w]{1,25}):(?:\/\/)?/.exec(url);
   return match && match[1] || '';
 }
 
-const DATA_URL_PATTERN = /^(?:([^;]+);)?(?:[^;]+;)?(base64|),([\s\S]*)$/;
+// RFC 2397: data:[<mediatype>][;base64],<data>
+// mediatype = type/subtype followed by optional ;name=value parameters
+const DATA_URL_PATTERN = /^([^,;]+\/[^,;]+)?((?:;[^,;=]+=[^,;]+)*)(;base64)?,([\s\S]*)$/;
 
 /**
  * Parse data uri to a Buffer or Blob
@@ -91792,42 +96290,44 @@ const DATA_URL_PATTERN = /^(?:([^;]+);)?(?:[^;]+;)?(base64|),([\s\S]*)$/;
 function fromDataURI(uri, asBlob, options) {
   const _Blob = options && options.Blob || platform.classes.Blob;
   const protocol = parseProtocol(uri);
-
   if (asBlob === undefined && _Blob) {
     asBlob = true;
   }
-
   if (protocol === 'data') {
     uri = protocol.length ? uri.slice(protocol.length + 1) : uri;
-
     const match = DATA_URL_PATTERN.exec(uri);
-
     if (!match) {
       throw new AxiosError('Invalid URL', AxiosError.ERR_INVALID_URL);
     }
+    const type = match[1];
+    const params = match[2];
+    const encoding = match[3] ? 'base64' : 'utf8';
+    const body = match[4];
 
-    const mime = match[1];
-    const isBase64 = match[2];
-    const body = match[3];
-    const buffer = Buffer.from(decodeURIComponent(body), isBase64 ? 'base64' : 'utf8');
-
+    // RFC 2397 section 3: default mediatype is text/plain;charset=US-ASCII
+    // Bare `data:,` leaves mime undefined; Blob normalises that to "" per spec.
+    let mime;
+    if (type) {
+      mime = params ? type + params : type;
+    } else if (params) {
+      mime = 'text/plain' + params;
+    }
+    const buffer = Buffer.from(decodeURIComponent(body), encoding);
     if (asBlob) {
       if (!_Blob) {
         throw new AxiosError('Blob is not supported', AxiosError.ERR_NOT_SUPPORT);
       }
-
-      return new _Blob([buffer], {type: mime});
+      return new _Blob([buffer], {
+        type: mime
+      });
     }
-
     return buffer;
   }
-
   throw new AxiosError('Unsupported protocol ' + protocol, AxiosError.ERR_NOT_SUPPORT);
 }
 
 const kInternals = Symbol('internals');
-
-class AxiosTransformStream extends stream__default["default"].Transform{
+class AxiosTransformStream extends stream.Transform {
   constructor(options) {
     options = utils$1.toFlatObject(options, {
       maxRate: 0,
@@ -91839,11 +96339,9 @@ class AxiosTransformStream extends stream__default["default"].Transform{
     }, null, (prop, source) => {
       return !utils$1.isUndefined(source[prop]);
     });
-
     super({
       readableHighWaterMark: options.chunkSize
     });
-
     const internals = this[kInternals] = {
       timeWindow: options.timeWindow,
       chunkSize: options.chunkSize,
@@ -91856,7 +96354,6 @@ class AxiosTransformStream extends stream__default["default"].Transform{
       bytes: 0,
       onReadCallback: null
     };
-
     this.on('newListener', event => {
       if (event === 'progress') {
         if (!internals.isCaptured) {
@@ -91865,36 +96362,26 @@ class AxiosTransformStream extends stream__default["default"].Transform{
       }
     });
   }
-
   _read(size) {
     const internals = this[kInternals];
-
     if (internals.onReadCallback) {
       internals.onReadCallback();
     }
-
     return super._read(size);
   }
-
   _transform(chunk, encoding, callback) {
     const internals = this[kInternals];
     const maxRate = internals.maxRate;
-
     const readableHighWaterMark = this.readableHighWaterMark;
-
     const timeWindow = internals.timeWindow;
-
     const divider = 1000 / timeWindow;
-    const bytesThreshold = (maxRate / divider);
+    const bytesThreshold = maxRate / divider;
     const minChunkSize = internals.minChunkSize !== false ? Math.max(internals.minChunkSize, bytesThreshold * 0.01) : 0;
-
     const pushChunk = (_chunk, _callback) => {
       const bytes = Buffer.byteLength(_chunk);
       internals.bytesSeen += bytes;
       internals.bytes += bytes;
-
       internals.isCaptured && this.emit('progress', internals.bytesSeen);
-
       if (this.push(_chunk)) {
         process.nextTick(_callback);
       } else {
@@ -91904,27 +96391,22 @@ class AxiosTransformStream extends stream__default["default"].Transform{
         };
       }
     };
-
     const transformChunk = (_chunk, _callback) => {
       const chunkSize = Buffer.byteLength(_chunk);
       let chunkRemainder = null;
       let maxChunkSize = readableHighWaterMark;
       let bytesLeft;
       let passed = 0;
-
       if (maxRate) {
         const now = Date.now();
-
-        if (!internals.ts || (passed = (now - internals.ts)) >= timeWindow) {
+        if (!internals.ts || (passed = now - internals.ts) >= timeWindow) {
           internals.ts = now;
           bytesLeft = bytesThreshold - internals.bytes;
           internals.bytes = bytesLeft < 0 ? -bytesLeft : 0;
           passed = 0;
         }
-
         bytesLeft = bytesThreshold - internals.bytes;
       }
-
       if (maxRate) {
         if (bytesLeft <= 0) {
           // next time window
@@ -91932,27 +96414,22 @@ class AxiosTransformStream extends stream__default["default"].Transform{
             _callback(null, _chunk);
           }, timeWindow - passed);
         }
-
         if (bytesLeft < maxChunkSize) {
           maxChunkSize = bytesLeft;
         }
       }
-
-      if (maxChunkSize && chunkSize > maxChunkSize && (chunkSize - maxChunkSize) > minChunkSize) {
+      if (maxChunkSize && chunkSize > maxChunkSize && chunkSize - maxChunkSize > minChunkSize) {
         chunkRemainder = _chunk.subarray(maxChunkSize);
         _chunk = _chunk.subarray(0, maxChunkSize);
       }
-
       pushChunk(_chunk, chunkRemainder ? () => {
         process.nextTick(_callback, null, chunkRemainder);
       } : _callback);
     };
-
     transformChunk(chunk, function transformNextChunk(err, _chunk) {
       if (err) {
         return callback(err);
       }
-
       if (_chunk) {
         transformChunk(_chunk, transformNextChunk);
       } else {
@@ -91962,10 +96439,9 @@ class AxiosTransformStream extends stream__default["default"].Transform{
   }
 }
 
-const AxiosTransformStream$1 = AxiosTransformStream;
-
-const {asyncIterator} = Symbol;
-
+const {
+  asyncIterator
+} = Symbol;
 const readBlob = async function* (blob) {
   if (blob.stream) {
     yield* blob.stream();
@@ -91978,144 +96454,114 @@ const readBlob = async function* (blob) {
   }
 };
 
-const readBlob$1 = readBlob;
-
 const BOUNDARY_ALPHABET = platform.ALPHABET.ALPHA_DIGIT + '-_';
-
-const textEncoder = typeof TextEncoder === 'function' ? new TextEncoder() : new util__default["default"].TextEncoder();
-
+const textEncoder = typeof TextEncoder === 'function' ? new TextEncoder() : new util.TextEncoder();
 const CRLF = '\r\n';
 const CRLF_BYTES = textEncoder.encode(CRLF);
 const CRLF_BYTES_COUNT = 2;
-
 class FormDataPart {
   constructor(name, value) {
-    const {escapeName} = this.constructor;
+    const {
+      escapeName
+    } = this.constructor;
     const isStringValue = utils$1.isString(value);
-
-    let headers = `Content-Disposition: form-data; name="${escapeName(name)}"${
-      !isStringValue && value.name ? `; filename="${escapeName(value.name)}"` : ''
-    }${CRLF}`;
-
+    let headers = `Content-Disposition: form-data; name="${escapeName(name)}"${!isStringValue && value.name ? `; filename="${escapeName(value.name)}"` : ''}${CRLF}`;
     if (isStringValue) {
       value = textEncoder.encode(String(value).replace(/\r?\n|\r\n?/g, CRLF));
     } else {
-      headers += `Content-Type: ${value.type || "application/octet-stream"}${CRLF}`;
+      const safeType = String(value.type || 'application/octet-stream').replace(/[\r\n]/g, '');
+      headers += `Content-Type: ${safeType}${CRLF}`;
     }
-
     this.headers = textEncoder.encode(headers + CRLF);
-
     this.contentLength = isStringValue ? value.byteLength : value.size;
-
     this.size = this.headers.byteLength + this.contentLength + CRLF_BYTES_COUNT;
-
     this.name = name;
     this.value = value;
   }
-
-  async *encode(){
+  async *encode() {
     yield this.headers;
-
-    const {value} = this;
-
-    if(utils$1.isTypedArray(value)) {
+    const {
+      value
+    } = this;
+    if (utils$1.isTypedArray(value)) {
       yield value;
     } else {
-      yield* readBlob$1(value);
+      yield* readBlob(value);
     }
-
     yield CRLF_BYTES;
   }
-
   static escapeName(name) {
-      return String(name).replace(/[\r\n"]/g, (match) => ({
-        '\r' : '%0D',
-        '\n' : '%0A',
-        '"' : '%22',
-      }[match]));
+    return String(name).replace(/[\r\n"]/g, match => ({
+      '\r': '%0D',
+      '\n': '%0A',
+      '"': '%22'
+    })[match]);
   }
 }
-
 const formDataToStream = (form, headersHandler, options) => {
   const {
     tag = 'form-data-boundary',
     size = 25,
     boundary = tag + '-' + platform.generateString(size, BOUNDARY_ALPHABET)
   } = options || {};
-
-  if(!utils$1.isFormData(form)) {
+  if (!utils$1.isFormData(form)) {
     throw TypeError('FormData instance required');
   }
-
   if (boundary.length < 1 || boundary.length > 70) {
-    throw Error('boundary must be 10-70 characters long')
+    throw Error('boundary must be 1-70 characters long');
   }
-
   const boundaryBytes = textEncoder.encode('--' + boundary + CRLF);
   const footerBytes = textEncoder.encode('--' + boundary + '--' + CRLF);
   let contentLength = footerBytes.byteLength;
-
   const parts = Array.from(form.entries()).map(([name, value]) => {
     const part = new FormDataPart(name, value);
     contentLength += part.size;
     return part;
   });
-
   contentLength += boundaryBytes.byteLength * parts.length;
-
   contentLength = utils$1.toFiniteNumber(contentLength);
-
   const computedHeaders = {
     'Content-Type': `multipart/form-data; boundary=${boundary}`
   };
-
   if (Number.isFinite(contentLength)) {
     computedHeaders['Content-Length'] = contentLength;
   }
-
   headersHandler && headersHandler(computedHeaders);
-
-  return stream.Readable.from((async function *() {
-    for(const part of parts) {
+  return stream.Readable.from(async function* () {
+    for (const part of parts) {
       yield boundaryBytes;
       yield* part.encode();
     }
-
     yield footerBytes;
-  })());
+  }());
 };
 
-const formDataToStream$1 = formDataToStream;
-
-class ZlibHeaderTransformStream extends stream__default["default"].Transform {
+class ZlibHeaderTransformStream extends stream.Transform {
   __transform(chunk, encoding, callback) {
     this.push(chunk);
     callback();
   }
-
   _transform(chunk, encoding, callback) {
     if (chunk.length !== 0) {
       this._transform = this.__transform;
 
       // Add Default Compression headers if no zlib headers are present
-      if (chunk[0] !== 120) { // Hex: 78
+      if (chunk[0] !== 120) {
+        // Hex: 78
         const header = Buffer.alloc(2);
         header[0] = 120; // Hex: 78
-        header[1] = 156; // Hex: 9C 
+        header[1] = 156; // Hex: 9C
         this.push(header, encoding);
       }
     }
-
     this.__transform(chunk, encoding, callback);
   }
 }
 
-const ZlibHeaderTransformStream$1 = ZlibHeaderTransformStream;
-
 const callbackify = (fn, reducer) => {
   return utils$1.isAsyncFn(fn) ? function (...args) {
     const cb = args.pop();
-    fn.apply(this, args).then((value) => {
+    fn.apply(this, args).then(value => {
       try {
         reducer ? cb(null, ...reducer(value)) : cb(null, value);
       } catch (err) {
@@ -92125,7 +96571,143 @@ const callbackify = (fn, reducer) => {
   } : fn;
 };
 
-const callbackify$1 = callbackify;
+const LOOPBACK_HOSTNAMES = new Set(['localhost']);
+const isIPv4Loopback = host => {
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  if (parts[0] !== '127') return false;
+  return parts.every(p => /^\d+$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+};
+const isIPv6Loopback = host => {
+  // Collapse all-zero groups: any form of ::1 / 0:0:...:0:1
+  // First, strip any leading "::" by normalising with Set lookup of common forms,
+  // then fall back to structural check.
+  if (host === '::1') return true;
+
+  // Check IPv4-mapped IPv6 loopback: ::ffff:<v4-loopback> or ::ffff:<hex-v4-loopback>
+  // Node's URL parser normalises ::ffff:127.0.0.1 → ::ffff:7f00:1
+  const v4MappedDotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (v4MappedDotted) return isIPv4Loopback(v4MappedDotted[1]);
+  const v4MappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (v4MappedHex) {
+    const high = parseInt(v4MappedHex[1], 16);
+    // High 16 bits must start with 127 (0x7f) — i.e. 0x7f00..0x7fff
+    return high >= 0x7f00 && high <= 0x7fff;
+  }
+
+  // Full-form ::1 variants: any number of zero groups followed by trailing 1
+  // e.g. 0:0:0:0:0:0:0:1, 0000:...:0001
+  const groups = host.split(':');
+  if (groups.length === 8) {
+    for (let i = 0; i < 7; i++) {
+      if (!/^0+$/.test(groups[i])) return false;
+    }
+    return /^0*1$/.test(groups[7]);
+  }
+  return false;
+};
+const isLoopback = host => {
+  if (!host) return false;
+  if (LOOPBACK_HOSTNAMES.has(host)) return true;
+  if (isIPv4Loopback(host)) return true;
+  return isIPv6Loopback(host);
+};
+const DEFAULT_PORTS = {
+  http: 80,
+  https: 443,
+  ws: 80,
+  wss: 443,
+  ftp: 21
+};
+const parseNoProxyEntry = entry => {
+  let entryHost = entry;
+  let entryPort = 0;
+  if (entryHost.charAt(0) === '[') {
+    const bracketIndex = entryHost.indexOf(']');
+    if (bracketIndex !== -1) {
+      const host = entryHost.slice(1, bracketIndex);
+      const rest = entryHost.slice(bracketIndex + 1);
+      if (rest.charAt(0) === ':' && /^\d+$/.test(rest.slice(1))) {
+        entryPort = Number.parseInt(rest.slice(1), 10);
+      }
+      return [host, entryPort];
+    }
+  }
+  const firstColon = entryHost.indexOf(':');
+  const lastColon = entryHost.lastIndexOf(':');
+  if (firstColon !== -1 && firstColon === lastColon && /^\d+$/.test(entryHost.slice(lastColon + 1))) {
+    entryPort = Number.parseInt(entryHost.slice(lastColon + 1), 10);
+    entryHost = entryHost.slice(0, lastColon);
+  }
+  return [entryHost, entryPort];
+};
+
+// Convert IPv4-mapped IPv6 (::ffff:0:0/96 prefix) to IPv4 dotted form so both
+// sides of a NO_PROXY comparison see the same canonical address. Without this,
+// `NO_PROXY=192.168.1.5` would not match a request to `http://[::ffff:192.168.1.5]/`
+// (Node's URL parser normalises that to `[::ffff:c0a8:105]`), and vice-versa,
+// allowing the proxy-bypass policy to be circumvented by using the alternate
+// representation. Returns the input unchanged when not IPv4-mapped.
+const IPV4_MAPPED_DOTTED_RE = /^(?:::|(?:0{1,4}:){1,4}:|(?:0{1,4}:){5})ffff:(\d+\.\d+\.\d+\.\d+)$/i;
+const IPV4_MAPPED_HEX_RE = /^(?:::|(?:0{1,4}:){1,4}:|(?:0{1,4}:){5})ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i;
+const unmapIPv4MappedIPv6 = host => {
+  if (typeof host !== 'string' || host.indexOf(':') === -1) return host;
+  const dotted = host.match(IPV4_MAPPED_DOTTED_RE);
+  if (dotted) return dotted[1];
+  const hex = host.match(IPV4_MAPPED_HEX_RE);
+  if (hex) {
+    const high = parseInt(hex[1], 16);
+    const low = parseInt(hex[2], 16);
+    return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  }
+  return host;
+};
+const normalizeNoProxyHost = hostname => {
+  if (!hostname) {
+    return hostname;
+  }
+  if (hostname.charAt(0) === '[' && hostname.charAt(hostname.length - 1) === ']') {
+    hostname = hostname.slice(1, -1);
+  }
+  return unmapIPv4MappedIPv6(hostname.replace(/\.+$/, ''));
+};
+function shouldBypassProxy(location) {
+  let parsed;
+  try {
+    parsed = new URL(location);
+  } catch (_err) {
+    return false;
+  }
+  const noProxy = (process.env.no_proxy || process.env.NO_PROXY || '').toLowerCase();
+  if (!noProxy) {
+    return false;
+  }
+  if (noProxy === '*') {
+    return true;
+  }
+  const port = Number.parseInt(parsed.port, 10) || DEFAULT_PORTS[parsed.protocol.split(':', 1)[0]] || 0;
+  const hostname = normalizeNoProxyHost(parsed.hostname.toLowerCase());
+  return noProxy.split(/[\s,]+/).some(entry => {
+    if (!entry) {
+      return false;
+    }
+    let [entryHost, entryPort] = parseNoProxyEntry(entry);
+    entryHost = normalizeNoProxyHost(entryHost);
+    if (!entryHost) {
+      return false;
+    }
+    if (entryPort && entryPort !== port) {
+      return false;
+    }
+    if (entryHost.charAt(0) === '*') {
+      entryHost = entryHost.slice(1);
+    }
+    if (entryHost.charAt(0) === '.') {
+      return hostname.endsWith(entryHost);
+    }
+    return hostname === entryHost || isLoopback(hostname) && isLoopback(entryHost);
+  });
+}
 
 /**
  * Calculate data maxRate
@@ -92140,41 +96722,29 @@ function speedometer(samplesCount, min) {
   let head = 0;
   let tail = 0;
   let firstSampleTS;
-
   min = min !== undefined ? min : 1000;
-
   return function push(chunkLength) {
     const now = Date.now();
-
     const startedAt = timestamps[tail];
-
     if (!firstSampleTS) {
       firstSampleTS = now;
     }
-
     bytes[head] = chunkLength;
     timestamps[head] = now;
-
     let i = tail;
     let bytesCount = 0;
-
     while (i !== head) {
       bytesCount += bytes[i++];
       i = i % samplesCount;
     }
-
     head = (head + 1) % samplesCount;
-
     if (head === tail) {
       tail = (tail + 1) % samplesCount;
     }
-
     if (now - firstSampleTS < min) {
       return;
     }
-
     const passed = startedAt && now - startedAt;
-
     return passed ? Math.round(bytesCount * 1000 / passed) : undefined;
   };
 }
@@ -92190,7 +96760,6 @@ function throttle(fn, freq) {
   let threshold = 1000 / freq;
   let lastArgs;
   let timer;
-
   const invoke = (args, now = Date.now()) => {
     timestamp = now;
     lastArgs = null;
@@ -92200,11 +96769,10 @@ function throttle(fn, freq) {
     }
     fn(...args);
   };
-
   const throttled = (...args) => {
     const now = Date.now();
     const passed = now - timestamp;
-    if ( passed >= threshold) {
+    if (passed >= threshold) {
       invoke(args, now);
     } else {
       lastArgs = args;
@@ -92216,52 +96784,46 @@ function throttle(fn, freq) {
       }
     }
   };
-
   const flush = () => lastArgs && invoke(lastArgs);
-
   return [throttled, flush];
 }
 
 const progressEventReducer = (listener, isDownloadStream, freq = 3) => {
   let bytesNotified = 0;
   const _speedometer = speedometer(50, 250);
-
   return throttle(e => {
-    const loaded = e.loaded;
+    if (!e || typeof e.loaded !== 'number') {
+      return;
+    }
+    const rawLoaded = e.loaded;
     const total = e.lengthComputable ? e.total : undefined;
-    const progressBytes = loaded - bytesNotified;
+    const loaded = total != null ? Math.min(rawLoaded, total) : rawLoaded;
+    const progressBytes = Math.max(0, loaded - bytesNotified);
     const rate = _speedometer(progressBytes);
-    const inRange = loaded <= total;
-
-    bytesNotified = loaded;
-
+    bytesNotified = Math.max(bytesNotified, loaded);
     const data = {
       loaded,
       total,
-      progress: total ? (loaded / total) : undefined,
+      progress: total ? loaded / total : undefined,
       bytes: progressBytes,
       rate: rate ? rate : undefined,
-      estimated: rate && total && inRange ? (total - loaded) / rate : undefined,
+      estimated: rate && total ? (total - loaded) / rate : undefined,
       event: e,
       lengthComputable: total != null,
       [isDownloadStream ? 'download' : 'upload']: true
     };
-
     listener(data);
   }, freq);
 };
-
 const progressEventDecorator = (total, throttled) => {
   const lengthComputable = total != null;
-
-  return [(loaded) => throttled[0]({
+  return [loaded => throttled[0]({
     lengthComputable,
     total,
     loaded
   }), throttled[1]];
 };
-
-const asyncDecorator = (fn) => (...args) => utils$1.asap(() => fn(...args));
+const asyncDecorator = fn => (...args) => utils$1.asap(() => fn(...args));
 
 /**
  * Estimate decoded byte length of a data:// URL *without* allocating large buffers.
@@ -92275,14 +96837,11 @@ const asyncDecorator = (fn) => (...args) => utils$1.asap(() => fn(...args));
 function estimateDataURLDecodedBytes(url) {
   if (!url || typeof url !== 'string') return 0;
   if (!url.startsWith('data:')) return 0;
-
   const comma = url.indexOf(',');
   if (comma < 0) return 0;
-
   const meta = url.slice(5, comma);
   const body = url.slice(comma + 1);
   const isBase64 = /;base64/i.test(meta);
-
   if (isBase64) {
     let effectiveLen = body.length;
     const len = body.length; // cache length
@@ -92291,25 +96850,20 @@ function estimateDataURLDecodedBytes(url) {
       if (body.charCodeAt(i) === 37 /* '%' */ && i + 2 < len) {
         const a = body.charCodeAt(i + 1);
         const b = body.charCodeAt(i + 2);
-        const isHex =
-          ((a >= 48 && a <= 57) || (a >= 65 && a <= 70) || (a >= 97 && a <= 102)) &&
-          ((b >= 48 && b <= 57) || (b >= 65 && b <= 70) || (b >= 97 && b <= 102));
-
+        const isHex = (a >= 48 && a <= 57 || a >= 65 && a <= 70 || a >= 97 && a <= 102) && (b >= 48 && b <= 57 || b >= 65 && b <= 70 || b >= 97 && b <= 102);
         if (isHex) {
           effectiveLen -= 2;
           i += 2;
         }
       }
     }
-
     let pad = 0;
     let idx = len - 1;
-
-    const tailIsPct3D = (j) =>
-      j >= 2 &&
-      body.charCodeAt(j - 2) === 37 && // '%'
-      body.charCodeAt(j - 1) === 51 && // '3'
-      (body.charCodeAt(j) === 68 || body.charCodeAt(j) === 100); // 'D' or 'd'
+    const tailIsPct3D = j => j >= 2 && body.charCodeAt(j - 2) === 37 &&
+    // '%'
+    body.charCodeAt(j - 1) === 51 && (
+    // '3'
+    body.charCodeAt(j) === 68 || body.charCodeAt(j) === 100); // 'D' or 'd'
 
     if (idx >= 0) {
       if (body.charCodeAt(idx) === 61 /* '=' */) {
@@ -92320,7 +96874,6 @@ function estimateDataURLDecodedBytes(url) {
         idx -= 3;
       }
     }
-
     if (pad === 1 && idx >= 0) {
       if (body.charCodeAt(idx) === 61 /* '=' */) {
         pad++;
@@ -92328,80 +96881,150 @@ function estimateDataURLDecodedBytes(url) {
         pad++;
       }
     }
-
     const groups = Math.floor(effectiveLen / 4);
     const bytes = groups * 3 - (pad || 0);
     return bytes > 0 ? bytes : 0;
   }
+  if (typeof Buffer !== 'undefined' && typeof Buffer.byteLength === 'function') {
+    return Buffer.byteLength(body, 'utf8');
+  }
 
-  return Buffer.byteLength(body, 'utf8');
+  // Compute UTF-8 byte length directly from UTF-16 code units without allocating
+  // a byte buffer (TextEncoder.encode would defeat the DoS guard on large bodies).
+  // Using body.length here would undercount non-ASCII (e.g. '€' is 1 code unit
+  // but 3 UTF-8 bytes).
+  let bytes = 0;
+  for (let i = 0, len = body.length; i < len; i++) {
+    const c = body.charCodeAt(i);
+    if (c < 0x80) {
+      bytes += 1;
+    } else if (c < 0x800) {
+      bytes += 2;
+    } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < len) {
+      const next = body.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 const zlibOptions = {
-  flush: zlib__default["default"].constants.Z_SYNC_FLUSH,
-  finishFlush: zlib__default["default"].constants.Z_SYNC_FLUSH
+  flush: zlib.constants.Z_SYNC_FLUSH,
+  finishFlush: zlib.constants.Z_SYNC_FLUSH
 };
-
 const brotliOptions = {
-  flush: zlib__default["default"].constants.BROTLI_OPERATION_FLUSH,
-  finishFlush: zlib__default["default"].constants.BROTLI_OPERATION_FLUSH
+  flush: zlib.constants.BROTLI_OPERATION_FLUSH,
+  finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH
 };
-
-const isBrotliSupported = utils$1.isFunction(zlib__default["default"].createBrotliDecompress);
-
-const {http: httpFollow, https: httpsFollow} = followRedirects__default["default"];
-
+const isBrotliSupported = utils$1.isFunction(zlib.createBrotliDecompress);
+const {
+  http: httpFollow,
+  https: httpsFollow
+} = followRedirects;
 const isHttps = /https:?/;
+const FORM_DATA_CONTENT_HEADERS$1 = ['content-type', 'content-length'];
+function setFormDataHeaders$1(headers, formHeaders, policy) {
+  if (policy !== 'content-only') {
+    headers.set(formHeaders);
+    return;
+  }
+  Object.entries(formHeaders).forEach(([key, val]) => {
+    if (FORM_DATA_CONTENT_HEADERS$1.includes(key.toLowerCase())) {
+      headers.set(key, val);
+    }
+  });
+}
 
+// Symbols used to bind a single 'error' listener to a pooled socket and track
+// the request currently owning that socket across keep-alive reuse (issue #10780).
+const kAxiosSocketListener = Symbol('axios.http.socketListener');
+const kAxiosCurrentReq = Symbol('axios.http.currentReq');
+
+// Tags HttpsProxyAgent instances installed by setProxy() so the redirect path
+// can strip them without clobbering a user-supplied agent that happens to be
+// an HttpsProxyAgent.
+const kAxiosInstalledTunnel = Symbol('axios.http.installedTunnel');
+
+// Cache of CONNECT-tunneling agents keyed by proxy config so repeat requests
+// through the same proxy reuse a single agent (and its socket pool). The
+// keyspace is bounded by the set of distinct proxy configs the process uses,
+// so unbounded growth is not a concern in practice.
+const tunnelingAgentCache = new Map();
+const tunnelingAgentCacheUser = new WeakMap();
+function getTunnelingAgent(agentOptions, userHttpsAgent) {
+  const key = agentOptions.protocol + '//' + agentOptions.hostname + ':' + (agentOptions.port || '') + '#' + (agentOptions.auth || '');
+  const cache = userHttpsAgent ? tunnelingAgentCacheUser.get(userHttpsAgent) || tunnelingAgentCacheUser.set(userHttpsAgent, new Map()).get(userHttpsAgent) : tunnelingAgentCache;
+  let agent = cache.get(key);
+  if (agent) return agent;
+  // Forward the user's TLS options (custom CA, rejectUnauthorized, client cert,
+  // etc.) into the tunneling agent so they apply to the origin TLS upgrade
+  // performed after CONNECT. Our proxy fields take precedence on conflict.
+  const merged = userHttpsAgent && userHttpsAgent.options ? {
+    ...userHttpsAgent.options,
+    ...agentOptions
+  } : agentOptions;
+  agent = new HttpsProxyAgent(merged);
+  agent[kAxiosInstalledTunnel] = true;
+  cache.set(key, agent);
+  return agent;
+}
 const supportedProtocols = platform.protocols.map(protocol => {
   return protocol + ':';
 });
 
-
+// Node's WHATWG URL parser returns `username` and `password` percent-encoded.
+// Decode before composing the `auth` option so credentials such as
+// `my%40email.com:pass` are sent as `my@email.com:pass`. Falls back to the
+// original value for malformed input so a bad encoding never throws.
+const decodeURIComponentSafe = value => {
+  if (!utils$1.isString(value)) {
+    return value;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    return value;
+  }
+};
 const flushOnFinish = (stream, [throttled, flush]) => {
-  stream
-    .on('end', flush)
-    .on('error', flush);
-
+  stream.on('end', flush).on('error', flush);
   return throttled;
 };
-
 class Http2Sessions {
   constructor() {
     this.sessions = Object.create(null);
   }
-
   getSession(authority, options) {
     options = Object.assign({
       sessionTimeout: 1000
     }, options);
-
     let authoritySessions = this.sessions[authority];
-
     if (authoritySessions) {
       let len = authoritySessions.length;
-
       for (let i = 0; i < len; i++) {
         const [sessionHandle, sessionOptions] = authoritySessions[i];
-        if (!sessionHandle.destroyed && !sessionHandle.closed && util__default["default"].isDeepStrictEqual(sessionOptions, options)) {
+        if (!sessionHandle.destroyed && !sessionHandle.closed && util.isDeepStrictEqual(sessionOptions, options)) {
           return sessionHandle;
         }
       }
     }
-
-    const session = http2__default["default"].connect(authority, options);
-
+    const session = http2.connect(authority, options);
     let removed;
-
     const removeSession = () => {
       if (removed) {
         return;
       }
-
       removed = true;
-
-      let entries = authoritySessions, len = entries.length, i = len;
-
+      let entries = authoritySessions,
+        len = entries.length,
+        i = len;
       while (i--) {
         if (entries[i][0] === session) {
           if (len === 1) {
@@ -92409,58 +97032,45 @@ class Http2Sessions {
           } else {
             entries.splice(i, 1);
           }
+          if (!session.closed) {
+            session.close();
+          }
           return;
         }
       }
     };
-
     const originalRequestFn = session.request;
-
-    const {sessionTimeout} = options;
-
-    if(sessionTimeout != null) {
-
+    const {
+      sessionTimeout
+    } = options;
+    if (sessionTimeout != null) {
       let timer;
       let streamsCount = 0;
-
       session.request = function () {
         const stream = originalRequestFn.apply(this, arguments);
-
         streamsCount++;
-
         if (timer) {
           clearTimeout(timer);
           timer = null;
         }
-
         stream.once('close', () => {
-          if (!--streamsCount) {
+          if (! --streamsCount) {
             timer = setTimeout(() => {
               timer = null;
               removeSession();
             }, sessionTimeout);
           }
         });
-
         return stream;
       };
     }
-
     session.once('close', removeSession);
-
-    let entry = [
-        session,
-        options
-      ];
-
-    authoritySessions ? authoritySessions.push(entry) : authoritySessions =  this.sessions[authority] = [entry];
-
+    let entry = [session, options];
+    authoritySessions ? authoritySessions.push(entry) : authoritySessions = this.sessions[authority] = [entry];
     return session;
   }
 }
-
 const http2Sessions = new Http2Sessions();
-
 
 /**
  * If the proxy or config beforeRedirects functions are defined, call them with the options
@@ -92470,12 +97080,12 @@ const http2Sessions = new Http2Sessions();
  *
  * @returns {Object<string, any>}
  */
-function dispatchBeforeRedirect(options, responseDetails) {
+function dispatchBeforeRedirect(options, responseDetails, requestDetails) {
   if (options.beforeRedirects.proxy) {
     options.beforeRedirects.proxy(options);
   }
   if (options.beforeRedirects.config) {
-    options.beforeRedirects.config(options, responseDetails);
+    options.beforeRedirects.config(options, responseDetails, requestDetails);
   }
 }
 
@@ -92488,220 +97098,313 @@ function dispatchBeforeRedirect(options, responseDetails) {
  *
  * @returns {http.ClientRequestArgs}
  */
-function setProxy(options, configProxy, location) {
+function setProxy(options, configProxy, location, isRedirect, configHttpsAgent) {
   let proxy = configProxy;
   if (!proxy && proxy !== false) {
-    const proxyUrl = proxyFromEnv__default["default"].getProxyForUrl(location);
+    const proxyUrl = getProxyForUrl(location);
     if (proxyUrl) {
-      proxy = new URL(proxyUrl);
+      if (!shouldBypassProxy(location)) {
+        proxy = new URL(proxyUrl);
+      }
     }
+  }
+  // On redirect re-invocation, strip any stale Proxy-Authorization header carried
+  // over from the prior request (e.g. new target no longer uses a proxy, or uses
+  // a different proxy). Skip on the initial request so user-supplied headers are
+  // preserved. Header names are case-insensitive, so remove every case variant.
+  if (isRedirect && options.headers) {
+    for (const name of Object.keys(options.headers)) {
+      if (name.toLowerCase() === 'proxy-authorization') {
+        delete options.headers[name];
+      }
+    }
+  }
+  // Strip any tunneling agent we installed for the previous hop so a redirect
+  // that drops the proxy or crosses an HTTPS↔HTTP boundary doesn't reuse a
+  // stale one. Match on our Symbol marker so a user-supplied HttpsProxyAgent
+  // (which won't carry the marker) is left alone.
+  if (isRedirect && options.agent && options.agent[kAxiosInstalledTunnel]) {
+    options.agent = undefined;
   }
   if (proxy) {
+    // Read proxy fields without traversing the prototype chain. URL instances expose
+    // username/password/hostname/host/port/protocol via getters on URL.prototype (so
+    // direct reads are shielded), but plain object proxies — and the `auth` field
+    // (which URL does not expose) — must be guarded so a polluted Object.prototype
+    // (e.g. Object.prototype.auth = { username, password }) cannot inject
+    // attacker-controlled credentials into the Proxy-Authorization header or
+    // redirect proxying to an attacker-controlled host.
+    const isProxyURL = proxy instanceof URL;
+    const readProxyField = key => isProxyURL || utils$1.hasOwnProp(proxy, key) ? proxy[key] : undefined;
+    const proxyUsername = readProxyField('username');
+    const proxyPassword = readProxyField('password');
+    let proxyAuth = utils$1.hasOwnProp(proxy, 'auth') ? proxy.auth : undefined;
+
     // Basic proxy authorization
-    if (proxy.username) {
-      proxy.auth = (proxy.username || '') + ':' + (proxy.password || '');
+    if (proxyUsername) {
+      proxyAuth = (proxyUsername || '') + ':' + (proxyPassword || '');
     }
-
-    if (proxy.auth) {
-      // Support proxy auth object form
-      if (proxy.auth.username || proxy.auth.password) {
-        proxy.auth = (proxy.auth.username || '') + ':' + (proxy.auth.password || '');
+    if (proxyAuth) {
+      // Support proxy auth object form. Read sub-fields via own-prop checks so a
+      // plain object inheriting from polluted Object.prototype cannot leak creds.
+      const authIsObject = typeof proxyAuth === 'object';
+      const authUsername = authIsObject && utils$1.hasOwnProp(proxyAuth, 'username') ? proxyAuth.username : undefined;
+      const authPassword = authIsObject && utils$1.hasOwnProp(proxyAuth, 'password') ? proxyAuth.password : undefined;
+      const validProxyAuth = Boolean(authUsername || authPassword);
+      if (validProxyAuth) {
+        proxyAuth = (authUsername || '') + ':' + (authPassword || '');
+      } else if (authIsObject) {
+        throw new AxiosError('Invalid proxy authorization', AxiosError.ERR_BAD_OPTION, {
+          proxy
+        });
       }
-      const base64 = Buffer
-        .from(proxy.auth, 'utf8')
-        .toString('base64');
-      options.headers['Proxy-Authorization'] = 'Basic ' + base64;
     }
+    const targetIsHttps = isHttps.test(options.protocol);
+    if (targetIsHttps) {
+      // CONNECT-tunneling path for HTTPS targets. Preserves end-to-end TLS to
+      // the origin so the proxy cannot inspect the URL, headers, or body — the
+      // behavior already promised by THREATMODEL.md (T-R9). HttpsProxyAgent
+      // sends Proxy-Authorization on the CONNECT request only, never on the
+      // wrapped TLS request, which is why we don't stamp it onto
+      // options.headers here. If the user already supplied an HttpsProxyAgent,
+      // they own tunneling end-to-end and we leave them alone; otherwise we
+      // install our own tunneling agent and forward their TLS options (if any)
+      // so a custom httpsAgent for cert pinning / rejectUnauthorized still
+      // applies to the origin TLS upgrade.
+      if (!(configHttpsAgent instanceof HttpsProxyAgent)) {
+        const proxyHost = readProxyField('hostname') || readProxyField('host');
+        const proxyPort = readProxyField('port');
+        const rawProxyProtocol = readProxyField('protocol');
+        const normalizedProtocol = rawProxyProtocol ? rawProxyProtocol.includes(':') ? rawProxyProtocol : `${rawProxyProtocol}:` : 'http:';
+        // Bracket IPv6 literals for URL parsing; URL.hostname strips the
+        // brackets again on read so the agent receives the raw form.
+        const proxyHostForURL = proxyHost && proxyHost.includes(':') && !proxyHost.startsWith('[') ? `[${proxyHost}]` : proxyHost;
+        const proxyURL = new URL(`${normalizedProtocol}//${proxyHostForURL}${proxyPort ? ':' + proxyPort : ''}`);
+        const agentOptions = {
+          protocol: proxyURL.protocol,
+          hostname: proxyURL.hostname.replace(/^\[|\]$/g, ''),
+          port: proxyURL.port,
+          auth: proxyAuth && typeof proxyAuth === 'string' ? proxyAuth : undefined
+        };
+        if (proxyURL.protocol === 'https:') {
+          agentOptions.ALPNProtocols = ['http/1.1'];
+        }
+        const tunnelingAgent = getTunnelingAgent(agentOptions, configHttpsAgent);
+        // Set both: `options.agent` is consumed by the native https.request path
+        // (config.maxRedirects === 0); `options.agents.https` is consumed by
+        // follow-redirects, which ignores `options.agent` when `options.agents`
+        // is present.
+        options.agent = tunnelingAgent;
+        if (options.agents) {
+          options.agents.https = tunnelingAgent;
+        }
+      }
+    } else {
+      // Forward-proxy mode for plaintext HTTP targets. The request line carries
+      // the absolute URL and the proxy sees everything — acceptable for plain
+      // HTTP since the wire was already plaintext.
+      if (proxyAuth) {
+        const base64 = Buffer.from(proxyAuth, 'utf8').toString('base64');
+        options.headers['Proxy-Authorization'] = 'Basic ' + base64;
+      }
 
-    options.headers.host = options.hostname + (options.port ? ':' + options.port : '');
-    const proxyHost = proxy.hostname || proxy.host;
-    options.hostname = proxyHost;
-    // Replace 'host' since options is not a URL object
-    options.host = proxyHost;
-    options.port = proxy.port;
-    options.path = location;
-    if (proxy.protocol) {
-      options.protocol = proxy.protocol.includes(':') ? proxy.protocol : `${proxy.protocol}:`;
+      // Preserve a user-supplied Host header (case-insensitive) so callers can override
+      // the value forwarded to the proxy; otherwise default to the request URL's host.
+      let hasUserHostHeader = false;
+      for (const name of Object.keys(options.headers)) {
+        if (name.toLowerCase() === 'host') {
+          hasUserHostHeader = true;
+          break;
+        }
+      }
+      if (!hasUserHostHeader) {
+        options.headers.host = options.hostname + (options.port ? ':' + options.port : '');
+      }
+      const proxyHost = readProxyField('hostname') || readProxyField('host');
+      options.hostname = proxyHost;
+      // Replace 'host' since options is not a URL object
+      options.host = proxyHost;
+      options.port = readProxyField('port');
+      options.path = location;
+      const proxyProtocol = readProxyField('protocol');
+      if (proxyProtocol) {
+        options.protocol = proxyProtocol.includes(':') ? proxyProtocol : `${proxyProtocol}:`;
+      }
     }
   }
-
   options.beforeRedirects.proxy = function beforeRedirect(redirectOptions) {
     // Configure proxy for redirected request, passing the original config proxy to apply
     // the exact same logic as if the redirected request was performed by axios directly.
-    setProxy(redirectOptions, configProxy, redirectOptions.href);
+    setProxy(redirectOptions, configProxy, redirectOptions.href, true, configHttpsAgent);
   };
 }
-
 const isHttpAdapterSupported = typeof process !== 'undefined' && utils$1.kindOf(process) === 'process';
 
 // temporary hotfix
 
-const wrapAsync = (asyncExecutor) => {
+const wrapAsync = asyncExecutor => {
   return new Promise((resolve, reject) => {
     let onDone;
     let isDone;
-
     const done = (value, isRejected) => {
       if (isDone) return;
       isDone = true;
       onDone && onDone(value, isRejected);
     };
-
-    const _resolve = (value) => {
+    const _resolve = value => {
       done(value);
       resolve(value);
     };
-
-    const _reject = (reason) => {
+    const _reject = reason => {
       done(reason, true);
       reject(reason);
     };
-
-    asyncExecutor(_resolve, _reject, (onDoneHandler) => (onDone = onDoneHandler)).catch(_reject);
-  })
+    asyncExecutor(_resolve, _reject, onDoneHandler => onDone = onDoneHandler).catch(_reject);
+  });
 };
-
-const resolveFamily = ({address, family}) => {
+const resolveFamily = ({
+  address,
+  family
+}) => {
   if (!utils$1.isString(address)) {
     throw TypeError('address must be a string');
   }
-  return ({
+  return {
     address,
     family: family || (address.indexOf('.') < 0 ? 6 : 4)
-  });
+  };
 };
-
-const buildAddressEntry = (address, family) => resolveFamily(utils$1.isObject(address) ? address : {address, family});
-
+const buildAddressEntry = (address, family) => resolveFamily(utils$1.isObject(address) ? address : {
+  address,
+  family
+});
 const http2Transport = {
   request(options, cb) {
-      const authority = options.protocol + '//' + options.hostname + ':' + (options.port || 80);
+    const authority = options.protocol + '//' + options.hostname + ':' + (options.port || (options.protocol === 'https:' ? 443 : 80));
+    const {
+      http2Options,
+      headers
+    } = options;
+    const session = http2Sessions.getSession(authority, http2Options);
+    const {
+      HTTP2_HEADER_SCHEME,
+      HTTP2_HEADER_METHOD,
+      HTTP2_HEADER_PATH,
+      HTTP2_HEADER_STATUS
+    } = http2.constants;
+    const http2Headers = {
+      [HTTP2_HEADER_SCHEME]: options.protocol.replace(':', ''),
+      [HTTP2_HEADER_METHOD]: options.method,
+      [HTTP2_HEADER_PATH]: options.path
+    };
+    utils$1.forEach(headers, (header, name) => {
+      name.charAt(0) !== ':' && (http2Headers[name] = header);
+    });
+    const req = session.request(http2Headers);
+    req.once('response', responseHeaders => {
+      const response = req; //duplex
 
-      const {http2Options, headers} = options;
-
-      const session = http2Sessions.getSession(authority, http2Options);
-
-      const {
-        HTTP2_HEADER_SCHEME,
-        HTTP2_HEADER_METHOD,
-        HTTP2_HEADER_PATH,
-        HTTP2_HEADER_STATUS
-      } = http2__default["default"].constants;
-
-      const http2Headers = {
-        [HTTP2_HEADER_SCHEME]: options.protocol.replace(':', ''),
-        [HTTP2_HEADER_METHOD]: options.method,
-        [HTTP2_HEADER_PATH]: options.path,
-      };
-
-      utils$1.forEach(headers, (header, name) => {
-        name.charAt(0) !== ':' && (http2Headers[name] = header);
-      });
-
-      const req = session.request(http2Headers);
-
-      req.once('response', (responseHeaders) => {
-        const response = req; //duplex
-
-        responseHeaders = Object.assign({}, responseHeaders);
-
-        const status = responseHeaders[HTTP2_HEADER_STATUS];
-
-        delete responseHeaders[HTTP2_HEADER_STATUS];
-
-        response.headers = responseHeaders;
-
-        response.statusCode = +status;
-
-        cb(response);
-      });
-
-      return req;
+      responseHeaders = Object.assign({}, responseHeaders);
+      const status = responseHeaders[HTTP2_HEADER_STATUS];
+      delete responseHeaders[HTTP2_HEADER_STATUS];
+      response.headers = responseHeaders;
+      response.statusCode = +status;
+      cb(response);
+    });
+    return req;
   }
 };
 
 /*eslint consistent-return:0*/
-const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
+var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
   return wrapAsync(async function dispatchHttpRequest(resolve, reject, onDone) {
-    let {data, lookup, family, httpVersion = 1, http2Options} = config;
-    const {responseType, responseEncoding} = config;
+    const own = key => utils$1.hasOwnProp(config, key) ? config[key] : undefined;
+    let data = own('data');
+    let lookup = own('lookup');
+    let family = own('family');
+    let httpVersion = own('httpVersion');
+    if (httpVersion === undefined) httpVersion = 1;
+    let http2Options = own('http2Options');
+    const responseType = own('responseType');
+    const responseEncoding = own('responseEncoding');
     const method = config.method.toUpperCase();
     let isDone;
     let rejected = false;
     let req;
-
+    let connectPhaseTimer;
     httpVersion = +httpVersion;
-
     if (Number.isNaN(httpVersion)) {
       throw TypeError(`Invalid protocol version: '${config.httpVersion}' is not a number`);
     }
-
     if (httpVersion !== 1 && httpVersion !== 2) {
       throw TypeError(`Unsupported protocol version '${httpVersion}'`);
     }
-
     const isHttp2 = httpVersion === 2;
-
     if (lookup) {
-      const _lookup = callbackify$1(lookup, (value) => utils$1.isArray(value) ? value : [value]);
+      const _lookup = callbackify(lookup, value => utils$1.isArray(value) ? value : [value]);
       // hotfix to support opt.all option which is required for node 20.x
       lookup = (hostname, opt, cb) => {
         _lookup(hostname, opt, (err, arg0, arg1) => {
           if (err) {
             return cb(err);
           }
-
           const addresses = utils$1.isArray(arg0) ? arg0.map(addr => buildAddressEntry(addr)) : [buildAddressEntry(arg0, arg1)];
-
           opt.all ? cb(err, addresses) : cb(err, addresses[0].address, addresses[0].family);
         });
       };
     }
-
     const abortEmitter = new events.EventEmitter();
-
     function abort(reason) {
       try {
         abortEmitter.emit('abort', !reason || reason.type ? new CanceledError(null, config, req) : reason);
-      } catch(err) {
+      } catch (err) {
         console.warn('emit error', err);
       }
     }
-
+    function clearConnectPhaseTimer() {
+      if (connectPhaseTimer) {
+        clearTimeout(connectPhaseTimer);
+        connectPhaseTimer = null;
+      }
+    }
+    function createTimeoutError() {
+      let timeoutErrorMessage = config.timeout ? 'timeout of ' + config.timeout + 'ms exceeded' : 'timeout exceeded';
+      const transitional = config.transitional || transitionalDefaults;
+      if (config.timeoutErrorMessage) {
+        timeoutErrorMessage = config.timeoutErrorMessage;
+      }
+      return new AxiosError(timeoutErrorMessage, transitional.clarifyTimeoutError ? AxiosError.ETIMEDOUT : AxiosError.ECONNABORTED, config, req);
+    }
     abortEmitter.once('abort', reject);
-
     const onFinished = () => {
+      clearConnectPhaseTimer();
       if (config.cancelToken) {
         config.cancelToken.unsubscribe(abort);
       }
-
       if (config.signal) {
         config.signal.removeEventListener('abort', abort);
       }
-
       abortEmitter.removeAllListeners();
     };
-
     if (config.cancelToken || config.signal) {
       config.cancelToken && config.cancelToken.subscribe(abort);
       if (config.signal) {
         config.signal.aborted ? abort() : config.signal.addEventListener('abort', abort);
       }
     }
-
     onDone((response, isRejected) => {
       isDone = true;
-
+      clearConnectPhaseTimer();
       if (isRejected) {
         rejected = true;
         onFinished();
         return;
       }
-
-      const {data} = response;
-
-      if (data instanceof stream__default["default"].Readable || data instanceof stream__default["default"].Duplex) {
-        const offListeners = stream__default["default"].finished(data, () => {
+      const {
+        data
+      } = response;
+      if (data instanceof stream.Readable || data instanceof stream.Duplex) {
+        const offListeners = stream.finished(data, () => {
           offListeners();
           onFinished();
         });
@@ -92710,33 +97413,21 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       }
     });
 
-
-
-
-
     // Parse url
     const fullPath = buildFullPath(config.baseURL, config.url, config.allowAbsoluteUrls);
     const parsed = new URL(fullPath, platform.hasBrowserEnv ? platform.origin : undefined);
     const protocol = parsed.protocol || supportedProtocols[0];
-
     if (protocol === 'data:') {
       // Apply the same semantics as HTTP: only enforce if a finite, non-negative cap is set.
       if (config.maxContentLength > -1) {
         // Use the exact string passed to fromDataURI (config.url); fall back to fullPath if needed.
         const dataUrl = String(config.url || fullPath || '');
         const estimated = estimateDataURLDecodedBytes(dataUrl);
-
         if (estimated > config.maxContentLength) {
-          return reject(new AxiosError(
-            'maxContentLength size of ' + config.maxContentLength + ' exceeded',
-            AxiosError.ERR_BAD_RESPONSE,
-            config
-          ));
+          return reject(new AxiosError('maxContentLength size of ' + config.maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config));
         }
       }
-
       let convertedData;
-
       if (method !== 'GET') {
         return settle(resolve, reject, {
           status: 405,
@@ -92745,7 +97436,6 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
           config
         });
       }
-
       try {
         convertedData = fromDataURI(config.url, responseType === 'blob', {
           Blob: config.env && config.env.Blob
@@ -92753,43 +97443,36 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       } catch (err) {
         throw AxiosError.from(err, AxiosError.ERR_BAD_REQUEST, config);
       }
-
       if (responseType === 'text') {
         convertedData = convertedData.toString(responseEncoding);
-
         if (!responseEncoding || responseEncoding === 'utf8') {
           convertedData = utils$1.stripBOM(convertedData);
         }
       } else if (responseType === 'stream') {
-        convertedData = stream__default["default"].Readable.from(convertedData);
+        convertedData = stream.Readable.from(convertedData);
       }
-
       return settle(resolve, reject, {
         data: convertedData,
         status: 200,
         statusText: 'OK',
-        headers: new AxiosHeaders$1(),
+        headers: new AxiosHeaders(),
         config
       });
     }
-
     if (supportedProtocols.indexOf(protocol) === -1) {
-      return reject(new AxiosError(
-        'Unsupported protocol ' + protocol,
-        AxiosError.ERR_BAD_REQUEST,
-        config
-      ));
+      return reject(new AxiosError('Unsupported protocol ' + protocol, AxiosError.ERR_BAD_REQUEST, config));
     }
-
-    const headers = AxiosHeaders$1.from(config.headers).normalize();
+    const headers = AxiosHeaders.from(config.headers).normalize();
 
     // Set User-Agent (required by some servers)
     // See https://github.com/axios/axios/issues/69
     // User-Agent is specified; handle case where no UA header is desired
     // Only set header if it hasn't been set in config
     headers.set('User-Agent', 'axios/' + VERSION, false);
-
-    const {onUploadProgress, onDownloadProgress} = config;
+    const {
+      onUploadProgress,
+      onDownloadProgress
+    } = config;
     const maxRate = config.maxRate;
     let maxUploadRate = undefined;
     let maxDownloadRate = undefined;
@@ -92797,105 +97480,77 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
     // support for spec compliant FormData objects
     if (utils$1.isSpecCompliantForm(data)) {
       const userBoundary = headers.getContentType(/boundary=([-_\w\d]{10,70})/i);
-
-      data = formDataToStream$1(data, (formHeaders) => {
+      data = formDataToStream(data, formHeaders => {
         headers.set(formHeaders);
       }, {
         tag: `axios-${VERSION}-boundary`,
         boundary: userBoundary && userBoundary[1] || undefined
       });
       // support for https://www.npmjs.com/package/form-data api
-    } else if (utils$1.isFormData(data) && utils$1.isFunction(data.getHeaders)) {
-      headers.set(data.getHeaders());
-
+    } else if (utils$1.isFormData(data) && utils$1.isFunction(data.getHeaders) && data.getHeaders !== Object.prototype.getHeaders) {
+      setFormDataHeaders$1(headers, data.getHeaders(), own('formDataHeaderPolicy'));
       if (!headers.hasContentLength()) {
         try {
-          const knownLength = await util__default["default"].promisify(data.getLength).call(data);
+          const knownLength = await util.promisify(data.getLength).call(data);
           Number.isFinite(knownLength) && knownLength >= 0 && headers.setContentLength(knownLength);
           /*eslint no-empty:0*/
-        } catch (e) {
-        }
+        } catch (e) {}
       }
     } else if (utils$1.isBlob(data) || utils$1.isFile(data)) {
       data.size && headers.setContentType(data.type || 'application/octet-stream');
       headers.setContentLength(data.size || 0);
-      data = stream__default["default"].Readable.from(readBlob$1(data));
+      data = stream.Readable.from(readBlob(data));
     } else if (data && !utils$1.isStream(data)) {
       if (Buffer.isBuffer(data)) ; else if (utils$1.isArrayBuffer(data)) {
         data = Buffer.from(new Uint8Array(data));
       } else if (utils$1.isString(data)) {
         data = Buffer.from(data, 'utf-8');
       } else {
-        return reject(new AxiosError(
-          'Data after transformation must be a string, an ArrayBuffer, a Buffer, or a Stream',
-          AxiosError.ERR_BAD_REQUEST,
-          config
-        ));
+        return reject(new AxiosError('Data after transformation must be a string, an ArrayBuffer, a Buffer, or a Stream', AxiosError.ERR_BAD_REQUEST, config));
       }
 
       // Add Content-Length header if data exists
       headers.setContentLength(data.length, false);
-
       if (config.maxBodyLength > -1 && data.length > config.maxBodyLength) {
-        return reject(new AxiosError(
-          'Request body larger than maxBodyLength limit',
-          AxiosError.ERR_BAD_REQUEST,
-          config
-        ));
+        return reject(new AxiosError('Request body larger than maxBodyLength limit', AxiosError.ERR_BAD_REQUEST, config));
       }
     }
-
     const contentLength = utils$1.toFiniteNumber(headers.getContentLength());
-
     if (utils$1.isArray(maxRate)) {
       maxUploadRate = maxRate[0];
       maxDownloadRate = maxRate[1];
     } else {
       maxUploadRate = maxDownloadRate = maxRate;
     }
-
     if (data && (onUploadProgress || maxUploadRate)) {
       if (!utils$1.isStream(data)) {
-        data = stream__default["default"].Readable.from(data, {objectMode: false});
+        data = stream.Readable.from(data, {
+          objectMode: false
+        });
       }
-
-      data = stream__default["default"].pipeline([data, new AxiosTransformStream$1({
+      data = stream.pipeline([data, new AxiosTransformStream({
         maxRate: utils$1.toFiniteNumber(maxUploadRate)
       })], utils$1.noop);
-
-      onUploadProgress && data.on('progress', flushOnFinish(
-        data,
-        progressEventDecorator(
-          contentLength,
-          progressEventReducer(asyncDecorator(onUploadProgress), false, 3)
-        )
-      ));
+      onUploadProgress && data.on('progress', flushOnFinish(data, progressEventDecorator(contentLength, progressEventReducer(asyncDecorator(onUploadProgress), false, 3))));
     }
 
     // HTTP basic authentication
     let auth = undefined;
-    if (config.auth) {
-      const username = config.auth.username || '';
-      const password = config.auth.password || '';
+    const configAuth = own('auth');
+    if (configAuth) {
+      const username = configAuth.username || '';
+      const password = configAuth.password || '';
       auth = username + ':' + password;
     }
-
     if (!auth && parsed.username) {
-      const urlUsername = parsed.username;
-      const urlPassword = parsed.password;
+      const urlUsername = decodeURIComponentSafe(parsed.username);
+      const urlPassword = decodeURIComponentSafe(parsed.password);
       auth = urlUsername + ':' + urlPassword;
     }
-
     auth && headers.delete('authorization');
-
-    let path;
-
+    let path$1;
     try {
-      path = buildURL(
-        parsed.pathname + parsed.search,
-        config.params,
-        config.paramsSerializer
-      ).replace(/^\?/, '');
+      path$1 = buildURL(parsed.pathname + parsed.search, config.params, config.paramsSerializer).replace(/^\?/, '');
     } catch (err) {
       const customErr = new Error(err.message);
       customErr.config = config;
@@ -92903,58 +97558,74 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       customErr.exists = true;
       return reject(customErr);
     }
+    headers.set('Accept-Encoding', 'gzip, compress, deflate' + (isBrotliSupported ? ', br' : ''), false);
 
-    headers.set(
-      'Accept-Encoding',
-      'gzip, compress, deflate' + (isBrotliSupported ? ', br' : ''), false
-      );
-
-    const options = {
-      path,
+    // Null-prototype to block prototype pollution gadgets on properties read
+    // directly by Node's http.request (e.g. insecureHTTPParser, lookup).
+    const options = Object.assign(Object.create(null), {
+      path: path$1,
       method: method,
-      headers: headers.toJSON(),
-      agents: { http: config.httpAgent, https: config.httpsAgent },
+      headers: toByteStringHeaderObject(headers),
+      agents: {
+        http: config.httpAgent,
+        https: config.httpsAgent
+      },
       auth,
       protocol,
       family,
       beforeRedirect: dispatchBeforeRedirect,
-      beforeRedirects: {},
+      beforeRedirects: Object.create(null),
       http2Options
-    };
+    });
 
     // cacheable-lookup integration hotfix
     !utils$1.isUndefined(lookup) && (options.lookup = lookup);
-
     if (config.socketPath) {
+      if (typeof config.socketPath !== 'string') {
+        return reject(new AxiosError('socketPath must be a string', AxiosError.ERR_BAD_OPTION_VALUE, config));
+      }
+      if (config.allowedSocketPaths != null) {
+        const allowed = Array.isArray(config.allowedSocketPaths) ? config.allowedSocketPaths : [config.allowedSocketPaths];
+        const resolvedSocket = path.resolve(config.socketPath);
+        const isAllowed = allowed.some(entry => typeof entry === 'string' && path.resolve(entry) === resolvedSocket);
+        if (!isAllowed) {
+          return reject(new AxiosError(`socketPath "${config.socketPath}" is not permitted by allowedSocketPaths`, AxiosError.ERR_BAD_OPTION_VALUE, config));
+        }
+      }
       options.socketPath = config.socketPath;
     } else {
-      options.hostname = parsed.hostname.startsWith("[") ? parsed.hostname.slice(1, -1) : parsed.hostname;
+      options.hostname = parsed.hostname.startsWith('[') ? parsed.hostname.slice(1, -1) : parsed.hostname;
       options.port = parsed.port;
-      setProxy(options, config.proxy, protocol + '//' + parsed.hostname + (parsed.port ? ':' + parsed.port : '') + options.path);
+      setProxy(options, config.proxy, protocol + '//' + parsed.hostname + (parsed.port ? ':' + parsed.port : '') + options.path, false, config.httpsAgent);
     }
-
     let transport;
+    let isNativeTransport = false;
     const isHttpsRequest = isHttps.test(options.protocol);
-    options.agent = isHttpsRequest ? config.httpsAgent : config.httpAgent;
-
+    // Don't clobber a CONNECT-tunneling agent installed by setProxy() for an
+    // HTTPS target.
+    if (options.agent == null) {
+      options.agent = isHttpsRequest ? config.httpsAgent : config.httpAgent;
+    }
     if (isHttp2) {
-       transport = http2Transport;
+      transport = http2Transport;
     } else {
-      if (config.transport) {
-        transport = config.transport;
+      const configTransport = own('transport');
+      if (configTransport) {
+        transport = configTransport;
       } else if (config.maxRedirects === 0) {
-        transport = isHttpsRequest ? https__default["default"] : http__default["default"];
+        transport = isHttpsRequest ? https : http;
+        isNativeTransport = true;
       } else {
         if (config.maxRedirects) {
           options.maxRedirects = config.maxRedirects;
         }
-        if (config.beforeRedirect) {
-          options.beforeRedirects.config = config.beforeRedirect;
+        const configBeforeRedirect = own('beforeRedirect');
+        if (configBeforeRedirect) {
+          options.beforeRedirects.config = configBeforeRedirect;
         }
         transport = isHttpsRequest ? httpsFollow : httpFollow;
       }
     }
-
     if (config.maxBodyLength > -1) {
       options.maxBodyLength = config.maxBodyLength;
     } else {
@@ -92962,31 +97633,22 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       options.maxBodyLength = Infinity;
     }
 
-    if (config.insecureHTTPParser) {
-      options.insecureHTTPParser = config.insecureHTTPParser;
-    }
+    // Always set an explicit own value so a polluted
+    // Object.prototype.insecureHTTPParser cannot enable the lenient parser
+    // through Node's internal options copy
+    options.insecureHTTPParser = Boolean(own('insecureHTTPParser'));
 
     // Create the request
     req = transport.request(options, function handleResponse(res) {
+      clearConnectPhaseTimer();
       if (req.destroyed) return;
-
       const streams = [res];
-
       const responseLength = utils$1.toFiniteNumber(res.headers['content-length']);
-
       if (onDownloadProgress || maxDownloadRate) {
-        const transformStream = new AxiosTransformStream$1({
+        const transformStream = new AxiosTransformStream({
           maxRate: utils$1.toFiniteNumber(maxDownloadRate)
         });
-
-        onDownloadProgress && transformStream.on('progress', flushOnFinish(
-          transformStream,
-          progressEventDecorator(
-            responseLength,
-            progressEventReducer(asyncDecorator(onDownloadProgress), true, 3)
-          )
-        ));
-
+        onDownloadProgress && transformStream.on('progress', flushOnFinish(transformStream, progressEventDecorator(responseLength, progressEventReducer(asyncDecorator(onDownloadProgress), true, 3))));
         streams.push(transformStream);
       }
 
@@ -93003,55 +97665,67 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
         if (method === 'HEAD' || res.statusCode === 204) {
           delete res.headers['content-encoding'];
         }
-
         switch ((res.headers['content-encoding'] || '').toLowerCase()) {
-        /*eslint default-case:0*/
-        case 'gzip':
-        case 'x-gzip':
-        case 'compress':
-        case 'x-compress':
-          // add the unzipper to the body stream processing pipeline
-          streams.push(zlib__default["default"].createUnzip(zlibOptions));
+          /*eslint default-case:0*/
+          case 'gzip':
+          case 'x-gzip':
+          case 'compress':
+          case 'x-compress':
+            // add the unzipper to the body stream processing pipeline
+            streams.push(zlib.createUnzip(zlibOptions));
 
-          // remove the content-encoding in order to not confuse downstream operations
-          delete res.headers['content-encoding'];
-          break;
-        case 'deflate':
-          streams.push(new ZlibHeaderTransformStream$1());
-
-          // add the unzipper to the body stream processing pipeline
-          streams.push(zlib__default["default"].createUnzip(zlibOptions));
-
-          // remove the content-encoding in order to not confuse downstream operations
-          delete res.headers['content-encoding'];
-          break;
-        case 'br':
-          if (isBrotliSupported) {
-            streams.push(zlib__default["default"].createBrotliDecompress(brotliOptions));
+            // remove the content-encoding in order to not confuse downstream operations
             delete res.headers['content-encoding'];
-          }
+            break;
+          case 'deflate':
+            streams.push(new ZlibHeaderTransformStream());
+
+            // add the unzipper to the body stream processing pipeline
+            streams.push(zlib.createUnzip(zlibOptions));
+
+            // remove the content-encoding in order to not confuse downstream operations
+            delete res.headers['content-encoding'];
+            break;
+          case 'br':
+            if (isBrotliSupported) {
+              streams.push(zlib.createBrotliDecompress(brotliOptions));
+              delete res.headers['content-encoding'];
+            }
         }
       }
-
-      responseStream = streams.length > 1 ? stream__default["default"].pipeline(streams, utils$1.noop) : streams[0];
-
-
-
+      responseStream = streams.length > 1 ? stream.pipeline(streams, utils$1.noop) : streams[0];
       const response = {
         status: res.statusCode,
         statusText: res.statusMessage,
-        headers: new AxiosHeaders$1(res.headers),
+        headers: new AxiosHeaders(res.headers),
         config,
         request: lastRequest
       };
-
       if (responseType === 'stream') {
+        // Enforce maxContentLength on streamed responses; previously this
+        // was applied only to buffered responses.
+        if (config.maxContentLength > -1) {
+          const limit = config.maxContentLength;
+          const source = responseStream;
+          async function* enforceMaxContentLength() {
+            let totalResponseBytes = 0;
+            for await (const chunk of source) {
+              totalResponseBytes += chunk.length;
+              if (totalResponseBytes > limit) {
+                throw new AxiosError('maxContentLength size of ' + limit + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, lastRequest);
+              }
+              yield chunk;
+            }
+          }
+          responseStream = stream.Readable.from(enforceMaxContentLength(), {
+            objectMode: false
+          });
+        }
         response.data = responseStream;
         settle(resolve, reject, response);
       } else {
         const responseBuffer = [];
         let totalResponseBytes = 0;
-
         responseStream.on('data', function handleStreamData(chunk) {
           responseBuffer.push(chunk);
           totalResponseBytes += chunk.length;
@@ -93061,31 +97735,21 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
             // stream.destroy() emit aborted event before calling reject() on Node.js v16
             rejected = true;
             responseStream.destroy();
-            abort(new AxiosError('maxContentLength size of ' + config.maxContentLength + ' exceeded',
-              AxiosError.ERR_BAD_RESPONSE, config, lastRequest));
+            abort(new AxiosError('maxContentLength size of ' + config.maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, lastRequest));
           }
         });
-
         responseStream.on('aborted', function handlerStreamAborted() {
           if (rejected) {
             return;
           }
-
-          const err = new AxiosError(
-            'stream has been aborted',
-            AxiosError.ERR_BAD_RESPONSE,
-            config,
-            lastRequest
-          );
+          const err = new AxiosError('stream has been aborted', AxiosError.ERR_BAD_RESPONSE, config, lastRequest, response);
           responseStream.destroy(err);
           reject(err);
         });
-
         responseStream.on('error', function handleStreamError(err) {
-          if (req.destroyed) return;
-          reject(AxiosError.from(err, null, config, lastRequest));
+          if (rejected) return;
+          reject(AxiosError.from(err, null, config, lastRequest, response));
         });
-
         responseStream.on('end', function handleStreamEnd() {
           try {
             let responseData = responseBuffer.length === 1 ? responseBuffer[0] : Buffer.concat(responseBuffer);
@@ -93102,7 +97766,6 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
           settle(resolve, reject, response);
         });
       }
-
       abortEmitter.once('abort', err => {
         if (!responseStream.destroyed) {
           responseStream.emit('error', err);
@@ -93110,7 +97773,6 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
         }
       });
     });
-
     abortEmitter.once('abort', err => {
       if (req.close) {
         req.close();
@@ -93121,31 +97783,67 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
 
     // Handle errors
     req.on('error', function handleRequestError(err) {
-      // @todo remove
-      // if (req.aborted && err.code !== AxiosError.ERR_FR_TOO_MANY_REDIRECTS) return;
       reject(AxiosError.from(err, null, config, req));
     });
 
     // set tcp keep alive to prevent drop connection by peer
+    // Track every socket bound to this outer RedirectableRequest so a single
+    // 'close' listener can release ownership on all of them. follow-redirects
+    // re-emits the 'socket' event for each hop's native request onto the same
+    // outer request, so attaching per-request listeners inside this handler
+    // would accumulate across hops and trigger MaxListenersExceededWarning at
+    // >= 11 redirects. Clearing only the last-bound socket would leave stale
+    // kAxiosCurrentReq refs on earlier hop sockets returned to the keep-alive
+    // pool, causing an idle-pool 'error' to be attributed to a closed req.
+    const boundSockets = new Set();
     req.on('socket', function handleRequestSocket(socket) {
       // default interval of sending ack packet is 1 minute
       socket.setKeepAlive(true, 1000 * 60);
+
+      // Install a single 'error' listener per socket (not per request) to avoid
+      // accumulating listeners on pooled keep-alive sockets that get reassigned
+      // to new requests before the previous request's 'close' fires (issue #10780).
+      // The listener is bound to the socket's currently-active request via a
+      // symbol, which is swapped as the socket is reassigned.
+      if (!socket[kAxiosSocketListener]) {
+        socket.on('error', function handleSocketError(err) {
+          const current = socket[kAxiosCurrentReq];
+          if (current && !current.destroyed) {
+            current.destroy(err);
+          }
+        });
+        socket[kAxiosSocketListener] = true;
+      }
+      socket[kAxiosCurrentReq] = req;
+      boundSockets.add(socket);
+    });
+    req.once('close', function clearCurrentReq() {
+      clearConnectPhaseTimer();
+      for (const socket of boundSockets) {
+        if (socket[kAxiosCurrentReq] === req) {
+          socket[kAxiosCurrentReq] = null;
+        }
+      }
+      boundSockets.clear();
     });
 
     // Handle request timeout
     if (config.timeout) {
       // This is forcing a int timeout to avoid problems if the `req` interface doesn't handle other types.
       const timeout = parseInt(config.timeout, 10);
-
       if (Number.isNaN(timeout)) {
-        abort(new AxiosError(
-          'error trying to parse `config.timeout` to int',
-          AxiosError.ERR_BAD_OPTION_VALUE,
-          config,
-          req
-        ));
-
+        abort(new AxiosError('error trying to parse `config.timeout` to int', AxiosError.ERR_BAD_OPTION_VALUE, config, req));
         return;
+      }
+      const handleTimeout = function handleTimeout() {
+        if (isDone) return;
+        abort(createTimeoutError());
+      };
+      if (isNativeTransport && timeout > 0) {
+        // Native ClientRequest#setTimeout starts from the socket lifecycle and
+        // may not fire while TCP connect is still pending. Mirror the
+        // follow-redirects wall-clock timer for the maxRedirects === 0 path.
+        connectPhaseTimer = setTimeout(handleTimeout, timeout);
       }
 
       // Sometime, the response will be very slow, and does not respond, the connect event will be block by event loop system.
@@ -93153,47 +97851,50 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       // At this time, if we have a large number of request, nodejs will hang up some socket on background. and the number will up and up.
       // And then these socket which be hang up will devouring CPU little by little.
       // ClientRequest.setTimeout will be fired on the specify milliseconds, and can make sure that abort() will be fired after connect.
-      req.setTimeout(timeout, function handleRequestTimeout() {
-        if (isDone) return;
-        let timeoutErrorMessage = config.timeout ? 'timeout of ' + config.timeout + 'ms exceeded' : 'timeout exceeded';
-        const transitional = config.transitional || transitionalDefaults;
-        if (config.timeoutErrorMessage) {
-          timeoutErrorMessage = config.timeoutErrorMessage;
-        }
-        abort(new AxiosError(
-          timeoutErrorMessage,
-          transitional.clarifyTimeoutError ? AxiosError.ETIMEDOUT : AxiosError.ECONNABORTED,
-          config,
-          req
-        ));
-      });
+      req.setTimeout(timeout, handleTimeout);
     } else {
       // explicitly reset the socket timeout value for a possible `keep-alive` request
       req.setTimeout(0);
     }
 
-
     // Send the request
     if (utils$1.isStream(data)) {
       let ended = false;
       let errored = false;
-
       data.on('end', () => {
         ended = true;
       });
-
       data.once('error', err => {
         errored = true;
         req.destroy(err);
       });
-
       data.on('close', () => {
         if (!ended && !errored) {
           abort(new CanceledError('Request stream has been aborted', config, req));
         }
       });
 
-      data.pipe(req);
+      // Enforce maxBodyLength for streamed uploads on the native http/https
+      // transport (maxRedirects === 0); follow-redirects enforces it on the
+      // other path.
+      let uploadStream = data;
+      if (config.maxBodyLength > -1 && config.maxRedirects === 0) {
+        const limit = config.maxBodyLength;
+        let bytesSent = 0;
+        uploadStream = stream.pipeline([data, new stream.Transform({
+          transform(chunk, _enc, cb) {
+            bytesSent += chunk.length;
+            if (bytesSent > limit) {
+              return cb(new AxiosError('Request body larger than maxBodyLength limit', AxiosError.ERR_BAD_REQUEST, config, req));
+            }
+            cb(null, chunk);
+          }
+        })], utils$1.noop);
+        uploadStream.on('error', err => {
+          if (!req.destroyed) req.destroy(err);
+        });
+      }
+      uploadStream.pipe(req);
     } else {
       data && req.write(data);
       req.end();
@@ -93201,70 +97902,67 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
   });
 };
 
-const isURLSameOrigin = platform.hasStandardBrowserEnv ? ((origin, isMSIE) => (url) => {
+var isURLSameOrigin = platform.hasStandardBrowserEnv ? ((origin, isMSIE) => url => {
   url = new URL(url, platform.origin);
+  return origin.protocol === url.protocol && origin.host === url.host && (isMSIE || origin.port === url.port);
+})(new URL(platform.origin), platform.navigator && /(msie|trident)/i.test(platform.navigator.userAgent)) : () => true;
 
-  return (
-    origin.protocol === url.protocol &&
-    origin.host === url.host &&
-    (isMSIE || origin.port === url.port)
-  );
-})(
-  new URL(platform.origin),
-  platform.navigator && /(msie|trident)/i.test(platform.navigator.userAgent)
-) : () => true;
-
-const cookies = platform.hasStandardBrowserEnv ?
-
-  // Standard browser envs support document.cookie
-  {
-    write(name, value, expires, path, domain, secure, sameSite) {
-      if (typeof document === 'undefined') return;
-
-      const cookie = [`${name}=${encodeURIComponent(value)}`];
-
-      if (utils$1.isNumber(expires)) {
-        cookie.push(`expires=${new Date(expires).toUTCString()}`);
-      }
-      if (utils$1.isString(path)) {
-        cookie.push(`path=${path}`);
-      }
-      if (utils$1.isString(domain)) {
-        cookie.push(`domain=${domain}`);
-      }
-      if (secure === true) {
-        cookie.push('secure');
-      }
-      if (utils$1.isString(sameSite)) {
-        cookie.push(`SameSite=${sameSite}`);
-      }
-
-      document.cookie = cookie.join('; ');
-    },
-
-    read(name) {
-      if (typeof document === 'undefined') return null;
-      const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
-      return match ? decodeURIComponent(match[1]) : null;
-    },
-
-    remove(name) {
-      this.write(name, '', Date.now() - 86400000, '/');
+var cookies = platform.hasStandardBrowserEnv ?
+// Standard browser envs support document.cookie
+{
+  write(name, value, expires, path, domain, secure, sameSite) {
+    if (typeof document === 'undefined') return;
+    const cookie = [`${name}=${encodeURIComponent(value)}`];
+    if (utils$1.isNumber(expires)) {
+      cookie.push(`expires=${new Date(expires).toUTCString()}`);
     }
+    if (utils$1.isString(path)) {
+      cookie.push(`path=${path}`);
+    }
+    if (utils$1.isString(domain)) {
+      cookie.push(`domain=${domain}`);
+    }
+    if (secure === true) {
+      cookie.push('secure');
+    }
+    if (utils$1.isString(sameSite)) {
+      cookie.push(`SameSite=${sameSite}`);
+    }
+    document.cookie = cookie.join('; ');
+  },
+  read(name) {
+    if (typeof document === 'undefined') return null;
+    // Match name=value by splitting on the semicolon separator instead of building a
+    // RegExp from `name` — interpolating an unescaped string into a RegExp would let
+    // metacharacters (e.g. `.+?` in an attacker-influenced cookie name) cause ReDoS or
+    // match the wrong cookie. Browsers may serialize cookie pairs as either ";" or
+    // "; ", so ignore optional whitespace before each cookie name.
+    const cookies = document.cookie.split(';');
+    for (let i = 0; i < cookies.length; i++) {
+      const cookie = cookies[i].replace(/^\s+/, '');
+      const eq = cookie.indexOf('=');
+      if (eq !== -1 && cookie.slice(0, eq) === name) {
+        return decodeURIComponent(cookie.slice(eq + 1));
+      }
+    }
+    return null;
+  },
+  remove(name) {
+    this.write(name, '', Date.now() - 86400000, '/');
   }
+} :
+// Non-standard browser env (web workers, react-native) lack needed support.
+{
+  write() {},
+  read() {
+    return null;
+  },
+  remove() {}
+};
 
-  :
-
-  // Non-standard browser env (web workers, react-native) lack needed support.
-  {
-    write() {},
-    read() {
-      return null;
-    },
-    remove() {}
-  };
-
-const headersToObject = (thing) => thing instanceof AxiosHeaders$1 ? { ...thing } : thing;
+const headersToObject = thing => thing instanceof AxiosHeaders ? {
+  ...thing
+} : thing;
 
 /**
  * Config-specific merge-function which creates a new config-object
@@ -93278,11 +97976,26 @@ const headersToObject = (thing) => thing instanceof AxiosHeaders$1 ? { ...thing 
 function mergeConfig(config1, config2) {
   // eslint-disable-next-line no-param-reassign
   config2 = config2 || {};
-  const config = {};
 
+  // Use a null-prototype object so that downstream reads such as `config.auth`
+  // or `config.baseURL` cannot inherit polluted values from Object.prototype.
+  // `hasOwnProperty` is restored as a non-enumerable own slot to preserve
+  // ergonomics for user code that relies on it.
+  const config = Object.create(null);
+  Object.defineProperty(config, 'hasOwnProperty', {
+    // Null-proto descriptor so a polluted Object.prototype.get cannot turn
+    // this data descriptor into an accessor descriptor on the way in.
+    __proto__: null,
+    value: Object.prototype.hasOwnProperty,
+    enumerable: false,
+    writable: true,
+    configurable: true
+  });
   function getMergedValue(target, source, prop, caseless) {
     if (utils$1.isPlainObject(target) && utils$1.isPlainObject(source)) {
-      return utils$1.merge.call({caseless}, target, source);
+      return utils$1.merge.call({
+        caseless
+      }, target, source);
     } else if (utils$1.isPlainObject(source)) {
       return utils$1.merge({}, source);
     } else if (utils$1.isArray(source)) {
@@ -93290,8 +98003,6 @@ function mergeConfig(config1, config2) {
     }
     return source;
   }
-
-  // eslint-disable-next-line consistent-return
   function mergeDeepProperties(a, b, prop, caseless) {
     if (!utils$1.isUndefined(b)) {
       return getMergedValue(a, b, prop, caseless);
@@ -93318,13 +98029,12 @@ function mergeConfig(config1, config2) {
 
   // eslint-disable-next-line consistent-return
   function mergeDirectKeys(a, b, prop) {
-    if (prop in config2) {
+    if (utils$1.hasOwnProp(config2, prop)) {
       return getMergedValue(a, b);
-    } else if (prop in config1) {
+    } else if (utils$1.hasOwnProp(config1, prop)) {
       return getMergedValue(undefined, a);
     }
   }
-
   const mergeMap = {
     url: valueFromConfig2,
     method: valueFromConfig2,
@@ -93352,110 +98062,134 @@ function mergeConfig(config1, config2) {
     httpsAgent: defaultToConfig2,
     cancelToken: defaultToConfig2,
     socketPath: defaultToConfig2,
+    allowedSocketPaths: defaultToConfig2,
     responseEncoding: defaultToConfig2,
     validateStatus: mergeDirectKeys,
     headers: (a, b, prop) => mergeDeepProperties(headersToObject(a), headersToObject(b), prop, true)
   };
-
-  utils$1.forEach(Object.keys({...config1, ...config2}), function computeConfigValue(prop) {
-    const merge = mergeMap[prop] || mergeDeepProperties;
-    const configValue = merge(config1[prop], config2[prop], prop);
-    (utils$1.isUndefined(configValue) && merge !== mergeDirectKeys) || (config[prop] = configValue);
+  utils$1.forEach(Object.keys({
+    ...config1,
+    ...config2
+  }), function computeConfigValue(prop) {
+    if (prop === '__proto__' || prop === 'constructor' || prop === 'prototype') return;
+    const merge = utils$1.hasOwnProp(mergeMap, prop) ? mergeMap[prop] : mergeDeepProperties;
+    const a = utils$1.hasOwnProp(config1, prop) ? config1[prop] : undefined;
+    const b = utils$1.hasOwnProp(config2, prop) ? config2[prop] : undefined;
+    const configValue = merge(a, b, prop);
+    utils$1.isUndefined(configValue) && merge !== mergeDirectKeys || (config[prop] = configValue);
   });
-
   return config;
 }
 
-const resolveConfig = (config) => {
+const FORM_DATA_CONTENT_HEADERS = ['content-type', 'content-length'];
+function setFormDataHeaders(headers, formHeaders, policy) {
+  if (policy !== 'content-only') {
+    headers.set(formHeaders);
+    return;
+  }
+  Object.entries(formHeaders).forEach(([key, val]) => {
+    if (FORM_DATA_CONTENT_HEADERS.includes(key.toLowerCase())) {
+      headers.set(key, val);
+    }
+  });
+}
+
+/**
+ * Encode a UTF-8 string to a Latin-1 byte string for use with btoa().
+ * This is a modern replacement for the deprecated unescape(encodeURIComponent(str)) pattern.
+ *
+ * @param {string} str The string to encode
+ *
+ * @returns {string} UTF-8 bytes as a Latin-1 string
+ */
+const encodeUTF8 = str => encodeURIComponent(str).replace(/%([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+var resolveConfig = config => {
   const newConfig = mergeConfig({}, config);
 
-  let { data, withXSRFToken, xsrfHeaderName, xsrfCookieName, headers, auth } = newConfig;
-
-  newConfig.headers = headers = AxiosHeaders$1.from(headers);
-
-  newConfig.url = buildURL(buildFullPath(newConfig.baseURL, newConfig.url, newConfig.allowAbsoluteUrls), config.params, config.paramsSerializer);
+  // Read only own properties to prevent prototype pollution gadgets
+  // (e.g. Object.prototype.baseURL = 'https://evil.com').
+  const own = key => utils$1.hasOwnProp(newConfig, key) ? newConfig[key] : undefined;
+  const data = own('data');
+  let withXSRFToken = own('withXSRFToken');
+  const xsrfHeaderName = own('xsrfHeaderName');
+  const xsrfCookieName = own('xsrfCookieName');
+  let headers = own('headers');
+  const auth = own('auth');
+  const baseURL = own('baseURL');
+  const allowAbsoluteUrls = own('allowAbsoluteUrls');
+  const url = own('url');
+  newConfig.headers = headers = AxiosHeaders.from(headers);
+  newConfig.url = buildURL(buildFullPath(baseURL, url, allowAbsoluteUrls), config.params, config.paramsSerializer);
 
   // HTTP basic authentication
   if (auth) {
-    headers.set('Authorization', 'Basic ' +
-      btoa((auth.username || '') + ':' + (auth.password ? unescape(encodeURIComponent(auth.password)) : ''))
-    );
+    headers.set('Authorization', 'Basic ' + btoa((auth.username || '') + ':' + (auth.password ? encodeUTF8(auth.password) : '')));
   }
-
   if (utils$1.isFormData(data)) {
     if (platform.hasStandardBrowserEnv || platform.hasStandardBrowserWebWorkerEnv) {
       headers.setContentType(undefined); // browser handles it
     } else if (utils$1.isFunction(data.getHeaders)) {
       // Node.js FormData (like form-data package)
-      const formHeaders = data.getHeaders();
-      // Only set safe headers to avoid overwriting security headers
-      const allowedHeaders = ['content-type', 'content-length'];
-      Object.entries(formHeaders).forEach(([key, val]) => {
-        if (allowedHeaders.includes(key.toLowerCase())) {
-          headers.set(key, val);
-        }
-      });
+      setFormDataHeaders(headers, data.getHeaders(), own('formDataHeaderPolicy'));
     }
-  }  
+  }
 
   // Add xsrf header
   // This is only done if running in a standard browser environment.
   // Specifically not if we're in a web worker, or react-native.
 
   if (platform.hasStandardBrowserEnv) {
-    withXSRFToken && utils$1.isFunction(withXSRFToken) && (withXSRFToken = withXSRFToken(newConfig));
+    if (utils$1.isFunction(withXSRFToken)) {
+      withXSRFToken = withXSRFToken(newConfig);
+    }
 
-    if (withXSRFToken || (withXSRFToken !== false && isURLSameOrigin(newConfig.url))) {
-      // Add xsrf header
+    // Strict boolean check — prevents proto-pollution gadgets (e.g. Object.prototype.withXSRFToken = 1)
+    // and misconfigurations (e.g. "false") from short-circuiting the same-origin check and leaking
+    // the XSRF token cross-origin.
+    const shouldSendXSRF = withXSRFToken === true || withXSRFToken == null && isURLSameOrigin(newConfig.url);
+    if (shouldSendXSRF) {
       const xsrfValue = xsrfHeaderName && xsrfCookieName && cookies.read(xsrfCookieName);
-
       if (xsrfValue) {
         headers.set(xsrfHeaderName, xsrfValue);
       }
     }
   }
-
   return newConfig;
 };
 
 const isXHRAdapterSupported = typeof XMLHttpRequest !== 'undefined';
-
-const xhrAdapter = isXHRAdapterSupported && function (config) {
+var xhrAdapter = isXHRAdapterSupported && function (config) {
   return new Promise(function dispatchXhrRequest(resolve, reject) {
     const _config = resolveConfig(config);
     let requestData = _config.data;
-    const requestHeaders = AxiosHeaders$1.from(_config.headers).normalize();
-    let {responseType, onUploadProgress, onDownloadProgress} = _config;
+    const requestHeaders = AxiosHeaders.from(_config.headers).normalize();
+    let {
+      responseType,
+      onUploadProgress,
+      onDownloadProgress
+    } = _config;
     let onCanceled;
     let uploadThrottled, downloadThrottled;
     let flushUpload, flushDownload;
-
     function done() {
       flushUpload && flushUpload(); // flush events
       flushDownload && flushDownload(); // flush events
 
       _config.cancelToken && _config.cancelToken.unsubscribe(onCanceled);
-
       _config.signal && _config.signal.removeEventListener('abort', onCanceled);
     }
-
     let request = new XMLHttpRequest();
-
     request.open(_config.method.toUpperCase(), _config.url, true);
 
     // Set the request timeout in MS
     request.timeout = _config.timeout;
-
     function onloadend() {
       if (!request) {
         return;
       }
       // Prepare the response
-      const responseHeaders = AxiosHeaders$1.from(
-        'getAllResponseHeaders' in request && request.getAllResponseHeaders()
-      );
-      const responseData = !responseType || responseType === 'text' || responseType === 'json' ?
-        request.responseText : request.response;
+      const responseHeaders = AxiosHeaders.from('getAllResponseHeaders' in request && request.getAllResponseHeaders());
+      const responseData = !responseType || responseType === 'text' || responseType === 'json' ? request.responseText : request.response;
       const response = {
         data: responseData,
         status: request.status,
@@ -93464,7 +98198,6 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
         config,
         request
       };
-
       settle(function _resolve(value) {
         resolve(value);
         done();
@@ -93476,7 +98209,6 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
       // Clean up request
       request = null;
     }
-
     if ('onloadend' in request) {
       // Use onloadend if available
       request.onloadend = onloadend;
@@ -93491,7 +98223,7 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
         // handled by onerror instead
         // With one exception: request that using file: protocol, most browsers
         // will return status as 0 even though it's a successful request
-        if (request.status === 0 && !(request.responseURL && request.responseURL.indexOf('file:') === 0)) {
+        if (request.status === 0 && !(request.responseURL && request.responseURL.startsWith('file:'))) {
           return;
         }
         // readystate handler is calling before onerror or ontimeout handlers,
@@ -93505,26 +98237,27 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
       if (!request) {
         return;
       }
-
       reject(new AxiosError('Request aborted', AxiosError.ECONNABORTED, config, request));
+      done();
 
       // Clean up request
       request = null;
     };
 
     // Handle low level network errors
-  request.onerror = function handleError(event) {
-       // Browsers deliver a ProgressEvent in XHR onerror
-       // (message may be empty; when present, surface it)
-       // See https://developer.mozilla.org/docs/Web/API/XMLHttpRequest/error_event
-       const msg = event && event.message ? event.message : 'Network Error';
-       const err = new AxiosError(msg, AxiosError.ERR_NETWORK, config, request);
-       // attach the underlying event for consumers who want details
-       err.event = event || null;
-       reject(err);
-       request = null;
+    request.onerror = function handleError(event) {
+      // Browsers deliver a ProgressEvent in XHR onerror
+      // (message may be empty; when present, surface it)
+      // See https://developer.mozilla.org/docs/Web/API/XMLHttpRequest/error_event
+      const msg = event && event.message ? event.message : 'Network Error';
+      const err = new AxiosError(msg, AxiosError.ERR_NETWORK, config, request);
+      // attach the underlying event for consumers who want details
+      err.event = event || null;
+      reject(err);
+      done();
+      request = null;
     };
-    
+
     // Handle timeout
     request.ontimeout = function handleTimeout() {
       let timeoutErrorMessage = _config.timeout ? 'timeout of ' + _config.timeout + 'ms exceeded' : 'timeout exceeded';
@@ -93532,11 +98265,8 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
       if (_config.timeoutErrorMessage) {
         timeoutErrorMessage = _config.timeoutErrorMessage;
       }
-      reject(new AxiosError(
-        timeoutErrorMessage,
-        transitional.clarifyTimeoutError ? AxiosError.ETIMEDOUT : AxiosError.ECONNABORTED,
-        config,
-        request));
+      reject(new AxiosError(timeoutErrorMessage, transitional.clarifyTimeoutError ? AxiosError.ETIMEDOUT : AxiosError.ECONNABORTED, config, request));
+      done();
 
       // Clean up request
       request = null;
@@ -93547,7 +98277,7 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
 
     // Add headers to the request
     if ('setRequestHeader' in request) {
-      utils$1.forEach(requestHeaders.toJSON(), function setRequestHeader(val, key) {
+      utils$1.forEach(toByteStringHeaderObject(requestHeaders), function setRequestHeader(val, key) {
         request.setRequestHeader(key, val);
       });
     }
@@ -93564,19 +98294,16 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
 
     // Handle progress if needed
     if (onDownloadProgress) {
-      ([downloadThrottled, flushDownload] = progressEventReducer(onDownloadProgress, true));
+      [downloadThrottled, flushDownload] = progressEventReducer(onDownloadProgress, true);
       request.addEventListener('progress', downloadThrottled);
     }
 
     // Not all browsers support upload events
     if (onUploadProgress && request.upload) {
-      ([uploadThrottled, flushUpload] = progressEventReducer(onUploadProgress));
-
+      [uploadThrottled, flushUpload] = progressEventReducer(onUploadProgress);
       request.upload.addEventListener('progress', uploadThrottled);
-
       request.upload.addEventListener('loadend', flushUpload);
     }
-
     if (_config.cancelToken || _config.signal) {
       // Handle cancellation
       // eslint-disable-next-line func-names
@@ -93586,22 +98313,19 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
         }
         reject(!cancel || cancel.type ? new CanceledError(null, config, request) : cancel);
         request.abort();
+        done();
         request = null;
       };
-
       _config.cancelToken && _config.cancelToken.subscribe(onCanceled);
       if (_config.signal) {
         _config.signal.aborted ? onCanceled() : _config.signal.addEventListener('abort', onCanceled);
       }
     }
-
     const protocol = parseProtocol(_config.url);
-
-    if (protocol && platform.protocols.indexOf(protocol) === -1) {
+    if (protocol && !platform.protocols.includes(protocol)) {
       reject(new AxiosError('Unsupported protocol ' + protocol + ':', AxiosError.ERR_BAD_REQUEST, config));
       return;
     }
-
 
     // Send the request
     request.send(requestData || null);
@@ -93609,84 +98333,74 @@ const xhrAdapter = isXHRAdapterSupported && function (config) {
 };
 
 const composeSignals = (signals, timeout) => {
-  const {length} = (signals = signals ? signals.filter(Boolean) : []);
-
-  if (timeout || length) {
-    let controller = new AbortController();
-
-    let aborted;
-
-    const onabort = function (reason) {
-      if (!aborted) {
-        aborted = true;
-        unsubscribe();
-        const err = reason instanceof Error ? reason : this.reason;
-        controller.abort(err instanceof AxiosError ? err : new CanceledError(err instanceof Error ? err.message : err));
-      }
-    };
-
-    let timer = timeout && setTimeout(() => {
-      timer = null;
-      onabort(new AxiosError(`timeout ${timeout} of ms exceeded`, AxiosError.ETIMEDOUT));
-    }, timeout);
-
-    const unsubscribe = () => {
-      if (signals) {
-        timer && clearTimeout(timer);
-        timer = null;
-        signals.forEach(signal => {
-          signal.unsubscribe ? signal.unsubscribe(onabort) : signal.removeEventListener('abort', onabort);
-        });
-        signals = null;
-      }
-    };
-
-    signals.forEach((signal) => signal.addEventListener('abort', onabort));
-
-    const {signal} = controller;
-
-    signal.unsubscribe = () => utils$1.asap(unsubscribe);
-
-    return signal;
+  signals = signals ? signals.filter(Boolean) : [];
+  if (!timeout && !signals.length) {
+    return;
   }
+  const controller = new AbortController();
+  let aborted = false;
+  const onabort = function (reason) {
+    if (!aborted) {
+      aborted = true;
+      unsubscribe();
+      const err = reason instanceof Error ? reason : this.reason;
+      controller.abort(err instanceof AxiosError ? err : new CanceledError(err instanceof Error ? err.message : err));
+    }
+  };
+  let timer = timeout && setTimeout(() => {
+    timer = null;
+    onabort(new AxiosError(`timeout of ${timeout}ms exceeded`, AxiosError.ETIMEDOUT));
+  }, timeout);
+  const unsubscribe = () => {
+    if (!signals) {
+      return;
+    }
+    timer && clearTimeout(timer);
+    timer = null;
+    signals.forEach(signal => {
+      signal.unsubscribe ? signal.unsubscribe(onabort) : signal.removeEventListener('abort', onabort);
+    });
+    signals = null;
+  };
+  signals.forEach(signal => signal.addEventListener('abort', onabort));
+  const {
+    signal
+  } = controller;
+  signal.unsubscribe = () => utils$1.asap(unsubscribe);
+  return signal;
 };
-
-const composeSignals$1 = composeSignals;
 
 const streamChunk = function* (chunk, chunkSize) {
   let len = chunk.byteLength;
-
-  if (!chunkSize || len < chunkSize) {
+  if (len < chunkSize) {
     yield chunk;
     return;
   }
-
   let pos = 0;
   let end;
-
   while (pos < len) {
     end = pos + chunkSize;
     yield chunk.slice(pos, end);
     pos = end;
   }
 };
-
 const readBytes = async function* (iterable, chunkSize) {
   for await (const chunk of readStream(iterable)) {
     yield* streamChunk(chunk, chunkSize);
   }
 };
-
 const readStream = async function* (stream) {
   if (stream[Symbol.asyncIterator]) {
     yield* stream;
     return;
   }
-
   const reader = stream.getReader();
   try {
     for (;;) {
-      const {done, value} = await reader.read();
+      const {
+        done,
+        value
+      } = await reader.read();
       if (done) {
         break;
       }
@@ -93696,30 +98410,28 @@ const readStream = async function* (stream) {
     await reader.cancel();
   }
 };
-
 const trackStream = (stream, chunkSize, onProgress, onFinish) => {
   const iterator = readBytes(stream, chunkSize);
-
   let bytes = 0;
   let done;
-  let _onFinish = (e) => {
+  let _onFinish = e => {
     if (!done) {
       done = true;
       onFinish && onFinish(e);
     }
   };
-
   return new ReadableStream({
     async pull(controller) {
       try {
-        const {done, value} = await iterator.next();
-
+        const {
+          done,
+          value
+        } = await iterator.next();
         if (done) {
-         _onFinish();
+          _onFinish();
           controller.close();
           return;
         }
-
         let len = value.byteLength;
         if (onProgress) {
           let loadedBytes = bytes += len;
@@ -93737,124 +98449,105 @@ const trackStream = (stream, chunkSize, onProgress, onFinish) => {
     }
   }, {
     highWaterMark: 2
-  })
+  });
 };
 
 const DEFAULT_CHUNK_SIZE = 64 * 1024;
-
-const {isFunction} = utils$1;
-
-const globalFetchAPI = (({Request, Response}) => ({
-  Request, Response
-}))(utils$1.global);
-
 const {
-  ReadableStream: ReadableStream$1, TextEncoder: TextEncoder$1
-} = utils$1.global;
-
-
+  isFunction
+} = utils$1;
 const test = (fn, ...args) => {
   try {
     return !!fn(...args);
   } catch (e) {
-    return false
+    return false;
   }
 };
-
-const factory = (env) => {
+const factory = env => {
+  const globalObject = utils$1.global !== undefined && utils$1.global !== null ? utils$1.global : globalThis;
+  const {
+    ReadableStream,
+    TextEncoder
+  } = globalObject;
   env = utils$1.merge.call({
     skipUndefined: true
-  }, globalFetchAPI, env);
-
-  const {fetch: envFetch, Request, Response} = env;
+  }, {
+    Request: globalObject.Request,
+    Response: globalObject.Response
+  }, env);
+  const {
+    fetch: envFetch,
+    Request,
+    Response
+  } = env;
   const isFetchSupported = envFetch ? isFunction(envFetch) : typeof fetch === 'function';
   const isRequestSupported = isFunction(Request);
   const isResponseSupported = isFunction(Response);
-
   if (!isFetchSupported) {
     return false;
   }
-
-  const isReadableStreamSupported = isFetchSupported && isFunction(ReadableStream$1);
-
-  const encodeText = isFetchSupported && (typeof TextEncoder$1 === 'function' ?
-      ((encoder) => (str) => encoder.encode(str))(new TextEncoder$1()) :
-      async (str) => new Uint8Array(await new Request(str).arrayBuffer())
-  );
-
+  const isReadableStreamSupported = isFetchSupported && isFunction(ReadableStream);
+  const encodeText = isFetchSupported && (typeof TextEncoder === 'function' ? (encoder => str => encoder.encode(str))(new TextEncoder()) : async str => new Uint8Array(await new Request(str).arrayBuffer()));
   const supportsRequestStream = isRequestSupported && isReadableStreamSupported && test(() => {
     let duplexAccessed = false;
-
-    const hasContentType = new Request(platform.origin, {
-      body: new ReadableStream$1(),
+    const request = new Request(platform.origin, {
+      body: new ReadableStream(),
       method: 'POST',
       get duplex() {
         duplexAccessed = true;
         return 'half';
-      },
-    }).headers.has('Content-Type');
-
+      }
+    });
+    const hasContentType = request.headers.has('Content-Type');
+    if (request.body != null) {
+      request.body.cancel();
+    }
     return duplexAccessed && !hasContentType;
   });
-
-  const supportsResponseStream = isResponseSupported && isReadableStreamSupported &&
-    test(() => utils$1.isReadableStream(new Response('').body));
-
+  const supportsResponseStream = isResponseSupported && isReadableStreamSupported && test(() => utils$1.isReadableStream(new Response('').body));
   const resolvers = {
-    stream: supportsResponseStream && ((res) => res.body)
+    stream: supportsResponseStream && (res => res.body)
   };
-
-  isFetchSupported && ((() => {
+  isFetchSupported && (() => {
     ['text', 'arrayBuffer', 'blob', 'formData', 'stream'].forEach(type => {
       !resolvers[type] && (resolvers[type] = (res, config) => {
         let method = res && res[type];
-
         if (method) {
           return method.call(res);
         }
-
         throw new AxiosError(`Response type '${type}' is not supported`, AxiosError.ERR_NOT_SUPPORT, config);
       });
     });
-  })());
-
-  const getBodyLength = async (body) => {
+  })();
+  const getBodyLength = async body => {
     if (body == null) {
       return 0;
     }
-
     if (utils$1.isBlob(body)) {
       return body.size;
     }
-
     if (utils$1.isSpecCompliantForm(body)) {
       const _request = new Request(platform.origin, {
         method: 'POST',
-        body,
+        body
       });
       return (await _request.arrayBuffer()).byteLength;
     }
-
     if (utils$1.isArrayBufferView(body) || utils$1.isArrayBuffer(body)) {
       return body.byteLength;
     }
-
     if (utils$1.isURLSearchParams(body)) {
       body = body + '';
     }
-
     if (utils$1.isString(body)) {
       return (await encodeText(body)).byteLength;
     }
   };
-
   const resolveBodyLength = async (headers, body) => {
     const length = utils$1.toFiniteNumber(headers.getContentLength());
-
     return length == null ? getBodyLength(body) : length;
   };
-
-  return async (config) => {
+  return async config => {
     let {
       url,
       method,
@@ -93867,154 +98560,194 @@ const factory = (env) => {
       responseType,
       headers,
       withCredentials = 'same-origin',
-      fetchOptions
+      fetchOptions,
+      maxContentLength,
+      maxBodyLength
     } = resolveConfig(config);
-
+    const hasMaxContentLength = utils$1.isNumber(maxContentLength) && maxContentLength > -1;
+    const hasMaxBodyLength = utils$1.isNumber(maxBodyLength) && maxBodyLength > -1;
     let _fetch = envFetch || fetch;
-
     responseType = responseType ? (responseType + '').toLowerCase() : 'text';
-
-    let composedSignal = composeSignals$1([signal, cancelToken && cancelToken.toAbortSignal()], timeout);
-
+    let composedSignal = composeSignals([signal, cancelToken && cancelToken.toAbortSignal()], timeout);
     let request = null;
-
     const unsubscribe = composedSignal && composedSignal.unsubscribe && (() => {
       composedSignal.unsubscribe();
     });
-
     let requestContentLength;
-
     try {
-      if (
-        onUploadProgress && supportsRequestStream && method !== 'get' && method !== 'head' &&
-        (requestContentLength = await resolveBodyLength(headers, data)) !== 0
-      ) {
-        let _request = new Request(url, {
-          method: 'POST',
-          body: data,
-          duplex: "half"
-        });
-
-        let contentTypeHeader;
-
-        if (utils$1.isFormData(data) && (contentTypeHeader = _request.headers.get('content-type'))) {
-          headers.setContentType(contentTypeHeader);
-        }
-
-        if (_request.body) {
-          const [onProgress, flush] = progressEventDecorator(
-            requestContentLength,
-            progressEventReducer(asyncDecorator(onUploadProgress))
-          );
-
-          data = trackStream(_request.body, DEFAULT_CHUNK_SIZE, onProgress, flush);
+      // Enforce maxContentLength for data: URLs up-front so we never materialize
+      // an oversized payload. The HTTP adapter applies the same check (see http.js
+      // "if (protocol === 'data:')" branch).
+      if (hasMaxContentLength && typeof url === 'string' && url.startsWith('data:')) {
+        const estimated = estimateDataURLDecodedBytes(url);
+        if (estimated > maxContentLength) {
+          throw new AxiosError('maxContentLength size of ' + maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, request);
         }
       }
 
+      // Enforce maxBodyLength against the outbound request body before dispatch.
+      // Mirrors http.js behavior (ERR_BAD_REQUEST / 'Request body larger than
+      // maxBodyLength limit'). Skip when the body length cannot be determined
+      // (e.g. a live ReadableStream supplied by the caller).
+      if (hasMaxBodyLength && method !== 'get' && method !== 'head') {
+        const outboundLength = await resolveBodyLength(headers, data);
+        if (typeof outboundLength === 'number' && isFinite(outboundLength) && outboundLength > maxBodyLength) {
+          throw new AxiosError('Request body larger than maxBodyLength limit', AxiosError.ERR_BAD_REQUEST, config, request);
+        }
+      }
+      if (onUploadProgress && supportsRequestStream && method !== 'get' && method !== 'head' && (requestContentLength = await resolveBodyLength(headers, data)) !== 0) {
+        let _request = new Request(url, {
+          method: 'POST',
+          body: data,
+          duplex: 'half'
+        });
+        let contentTypeHeader;
+        if (utils$1.isFormData(data) && (contentTypeHeader = _request.headers.get('content-type'))) {
+          headers.setContentType(contentTypeHeader);
+        }
+        if (_request.body) {
+          const [onProgress, flush] = progressEventDecorator(requestContentLength, progressEventReducer(asyncDecorator(onUploadProgress)));
+          data = trackStream(_request.body, DEFAULT_CHUNK_SIZE, onProgress, flush);
+        }
+      }
       if (!utils$1.isString(withCredentials)) {
         withCredentials = withCredentials ? 'include' : 'omit';
       }
 
       // Cloudflare Workers throws when credentials are defined
       // see https://github.com/cloudflare/workerd/issues/902
-      const isCredentialsSupported = isRequestSupported && "credentials" in Request.prototype;
+      const isCredentialsSupported = isRequestSupported && 'credentials' in Request.prototype;
 
+      // If data is FormData and Content-Type is multipart/form-data without boundary,
+      // delete it so fetch can set it correctly with the boundary
+      if (utils$1.isFormData(data)) {
+        const contentType = headers.getContentType();
+        if (contentType && /^multipart\/form-data/i.test(contentType) && !/boundary=/i.test(contentType)) {
+          headers.delete('content-type');
+        }
+      }
+
+      // Set User-Agent header if not already set (fetch defaults to 'node' in Node.js)
+      headers.set('User-Agent', 'axios/' + VERSION, false);
       const resolvedOptions = {
         ...fetchOptions,
         signal: composedSignal,
         method: method.toUpperCase(),
-        headers: headers.normalize().toJSON(),
+        headers: toByteStringHeaderObject(headers.normalize()),
         body: data,
-        duplex: "half",
+        duplex: 'half',
         credentials: isCredentialsSupported ? withCredentials : undefined
       };
-
       request = isRequestSupported && new Request(url, resolvedOptions);
-
       let response = await (isRequestSupported ? _fetch(request, fetchOptions) : _fetch(url, resolvedOptions));
 
+      // Cheap pre-check: if the server honestly declares a content-length that
+      // already exceeds the cap, reject before we start streaming.
+      if (hasMaxContentLength) {
+        const declaredLength = utils$1.toFiniteNumber(response.headers.get('content-length'));
+        if (declaredLength != null && declaredLength > maxContentLength) {
+          throw new AxiosError('maxContentLength size of ' + maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, request);
+        }
+      }
       const isStreamResponse = supportsResponseStream && (responseType === 'stream' || responseType === 'response');
-
-      if (supportsResponseStream && (onDownloadProgress || (isStreamResponse && unsubscribe))) {
+      if (supportsResponseStream && response.body && (onDownloadProgress || hasMaxContentLength || isStreamResponse && unsubscribe)) {
         const options = {};
-
         ['status', 'statusText', 'headers'].forEach(prop => {
           options[prop] = response[prop];
         });
-
         const responseContentLength = utils$1.toFiniteNumber(response.headers.get('content-length'));
-
-        const [onProgress, flush] = onDownloadProgress && progressEventDecorator(
-          responseContentLength,
-          progressEventReducer(asyncDecorator(onDownloadProgress), true)
-        ) || [];
-
-        response = new Response(
-          trackStream(response.body, DEFAULT_CHUNK_SIZE, onProgress, () => {
-            flush && flush();
-            unsubscribe && unsubscribe();
-          }),
-          options
-        );
+        const [onProgress, flush] = onDownloadProgress && progressEventDecorator(responseContentLength, progressEventReducer(asyncDecorator(onDownloadProgress), true)) || [];
+        let bytesRead = 0;
+        const onChunkProgress = loadedBytes => {
+          if (hasMaxContentLength) {
+            bytesRead = loadedBytes;
+            if (bytesRead > maxContentLength) {
+              throw new AxiosError('maxContentLength size of ' + maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, request);
+            }
+          }
+          onProgress && onProgress(loadedBytes);
+        };
+        response = new Response(trackStream(response.body, DEFAULT_CHUNK_SIZE, onChunkProgress, () => {
+          flush && flush();
+          unsubscribe && unsubscribe();
+        }), options);
       }
-
       responseType = responseType || 'text';
-
       let responseData = await resolvers[utils$1.findKey(resolvers, responseType) || 'text'](response, config);
 
+      // Fallback enforcement for environments without ReadableStream support
+      // (legacy runtimes). Detect materialized size from typed output; skip
+      // streams/Response passthrough since the user will read those themselves.
+      if (hasMaxContentLength && !supportsResponseStream && !isStreamResponse) {
+        let materializedSize;
+        if (responseData != null) {
+          if (typeof responseData.byteLength === 'number') {
+            materializedSize = responseData.byteLength;
+          } else if (typeof responseData.size === 'number') {
+            materializedSize = responseData.size;
+          } else if (typeof responseData === 'string') {
+            materializedSize = typeof TextEncoder === 'function' ? new TextEncoder().encode(responseData).byteLength : responseData.length;
+          }
+        }
+        if (typeof materializedSize === 'number' && materializedSize > maxContentLength) {
+          throw new AxiosError('maxContentLength size of ' + maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, request);
+        }
+      }
       !isStreamResponse && unsubscribe && unsubscribe();
-
       return await new Promise((resolve, reject) => {
         settle(resolve, reject, {
           data: responseData,
-          headers: AxiosHeaders$1.from(response.headers),
+          headers: AxiosHeaders.from(response.headers),
           status: response.status,
           statusText: response.statusText,
           config,
           request
         });
-      })
+      });
     } catch (err) {
       unsubscribe && unsubscribe();
 
-      if (err && err.name === 'TypeError' && /Load failed|fetch/i.test(err.message)) {
-        throw Object.assign(
-          new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, request),
-          {
-            cause: err.cause || err
-          }
-        )
+      // Safari can surface fetch aborts as a DOMException-like object whose
+      // branded getters throw. Prefer our composed signal reason before reading
+      // the caught error, preserving timeout vs cancellation semantics.
+      if (composedSignal && composedSignal.aborted && composedSignal.reason instanceof AxiosError) {
+        const canceledError = composedSignal.reason;
+        canceledError.config = config;
+        request && (canceledError.request = request);
+        err !== canceledError && (canceledError.cause = err);
+        throw canceledError;
       }
-
-      throw AxiosError.from(err, err && err.code, config, request);
+      if (err && err.name === 'TypeError' && /Load failed|fetch/i.test(err.message)) {
+        throw Object.assign(new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, request, err && err.response), {
+          cause: err.cause || err
+        });
+      }
+      throw AxiosError.from(err, err && err.code, config, request, err && err.response);
     }
-  }
+  };
 };
-
 const seedCache = new Map();
-
-const getFetch = (config) => {
-  let env = (config && config.env) || {};
-  const {fetch, Request, Response} = env;
-  const seeds = [
-    Request, Response, fetch
-  ];
-
-  let len = seeds.length, i = len,
-    seed, target, map = seedCache;
-
+const getFetch = config => {
+  let env = config && config.env || {};
+  const {
+    fetch,
+    Request,
+    Response
+  } = env;
+  const seeds = [Request, Response, fetch];
+  let len = seeds.length,
+    i = len,
+    seed,
+    target,
+    map = seedCache;
   while (i--) {
     seed = seeds[i];
     target = map.get(seed);
-
-    target === undefined && map.set(seed, target = (i ? new Map() : factory(env)));
-
+    target === undefined && map.set(seed, target = i ? new Map() : factory(env));
     map = target;
   }
-
   return target;
 };
-
 getFetch();
 
 /**
@@ -94023,14 +98756,14 @@ getFetch();
  * - `http` for Node.js
  * - `xhr` for browsers
  * - `fetch` for fetch API-based requests
- * 
+ *
  * @type {Object<string, Function|Object>}
  */
 const knownAdapters = {
   http: httpAdapter,
   xhr: xhrAdapter,
   fetch: {
-    get: getFetch,
+    get: getFetch
   }
 };
 
@@ -94038,35 +98771,43 @@ const knownAdapters = {
 utils$1.forEach(knownAdapters, (fn, value) => {
   if (fn) {
     try {
-      Object.defineProperty(fn, 'name', { value });
+      // Null-proto descriptors so a polluted Object.prototype.get cannot turn
+      // these data descriptors into accessor descriptors on the way in.
+      Object.defineProperty(fn, 'name', {
+        __proto__: null,
+        value
+      });
     } catch (e) {
       // eslint-disable-next-line no-empty
     }
-    Object.defineProperty(fn, 'adapterName', { value });
+    Object.defineProperty(fn, 'adapterName', {
+      __proto__: null,
+      value
+    });
   }
 });
 
 /**
  * Render a rejection reason string for unknown or unsupported adapters
- * 
+ *
  * @param {string} reason
  * @returns {string}
  */
-const renderReason = (reason) => `- ${reason}`;
+const renderReason = reason => `- ${reason}`;
 
 /**
  * Check if the adapter is resolved (function, null, or false)
- * 
+ *
  * @param {Function|null|false} adapter
  * @returns {boolean}
  */
-const isResolvedHandle = (adapter) => utils$1.isFunction(adapter) || adapter === null || adapter === false;
+const isResolvedHandle = adapter => utils$1.isFunction(adapter) || adapter === null || adapter === false;
 
 /**
  * Get the first suitable adapter from the provided list.
  * Tries each adapter in order until a supported one is found.
  * Throws an AxiosError if no adapter is suitable.
- * 
+ *
  * @param {Array<string|Function>|string|Function} adapters - Adapter(s) by name or function.
  * @param {Object} config - Axios request configuration
  * @throws {AxiosError} If no suitable adapter is available
@@ -94074,63 +98815,44 @@ const isResolvedHandle = (adapter) => utils$1.isFunction(adapter) || adapter ===
  */
 function getAdapter(adapters, config) {
   adapters = utils$1.isArray(adapters) ? adapters : [adapters];
-
-  const { length } = adapters;
+  const {
+    length
+  } = adapters;
   let nameOrAdapter;
   let adapter;
-
   const rejectedReasons = {};
-
   for (let i = 0; i < length; i++) {
     nameOrAdapter = adapters[i];
     let id;
-
     adapter = nameOrAdapter;
-
     if (!isResolvedHandle(nameOrAdapter)) {
       adapter = knownAdapters[(id = String(nameOrAdapter)).toLowerCase()];
-
       if (adapter === undefined) {
         throw new AxiosError(`Unknown adapter '${id}'`);
       }
     }
-
     if (adapter && (utils$1.isFunction(adapter) || (adapter = adapter.get(config)))) {
       break;
     }
-
     rejectedReasons[id || '#' + i] = adapter;
   }
-
   if (!adapter) {
-    const reasons = Object.entries(rejectedReasons)
-      .map(([id, state]) => `adapter ${id} ` +
-        (state === false ? 'is not supported by the environment' : 'is not available in the build')
-      );
-
-    let s = length ?
-      (reasons.length > 1 ? 'since :\n' + reasons.map(renderReason).join('\n') : ' ' + renderReason(reasons[0])) :
-      'as no adapter specified';
-
-    throw new AxiosError(
-      `There is no suitable adapter to dispatch the request ` + s,
-      'ERR_NOT_SUPPORT'
-    );
+    const reasons = Object.entries(rejectedReasons).map(([id, state]) => `adapter ${id} ` + (state === false ? 'is not supported by the environment' : 'is not available in the build'));
+    let s = length ? reasons.length > 1 ? 'since :\n' + reasons.map(renderReason).join('\n') : ' ' + renderReason(reasons[0]) : 'as no adapter specified';
+    throw new AxiosError(`There is no suitable adapter to dispatch the request ` + s, 'ERR_NOT_SUPPORT');
   }
-
   return adapter;
 }
 
 /**
  * Exports Axios adapters and utility to resolve an adapter
  */
-const adapters = {
+var adapters = {
   /**
    * Resolve an adapter from a list of adapter names or functions.
    * @type {Function}
    */
   getAdapter,
-
   /**
    * Exposes all known adapters
    * @type {Object<string, Function|Object>}
@@ -94149,7 +98871,6 @@ function throwIfCancellationRequested(config) {
   if (config.cancelToken) {
     config.cancelToken.throwIfRequested();
   }
-
   if (config.signal && config.signal.aborted) {
     throw new CanceledError(null, config);
   }
@@ -94164,33 +98885,27 @@ function throwIfCancellationRequested(config) {
  */
 function dispatchRequest(config) {
   throwIfCancellationRequested(config);
-
-  config.headers = AxiosHeaders$1.from(config.headers);
+  config.headers = AxiosHeaders.from(config.headers);
 
   // Transform request data
-  config.data = transformData.call(
-    config,
-    config.transformRequest
-  );
-
+  config.data = transformData.call(config, config.transformRequest);
   if (['post', 'put', 'patch'].indexOf(config.method) !== -1) {
     config.headers.setContentType('application/x-www-form-urlencoded', false);
   }
-
-  const adapter = adapters.getAdapter(config.adapter || defaults$1.adapter, config);
-
+  const adapter = adapters.getAdapter(config.adapter || defaults.adapter, config);
   return adapter(config).then(function onAdapterResolution(response) {
     throwIfCancellationRequested(config);
 
-    // Transform response data
-    response.data = transformData.call(
-      config,
-      config.transformResponse,
-      response
-    );
-
-    response.headers = AxiosHeaders$1.from(response.headers);
-
+    // Expose the current response on config so that transformResponse can
+    // attach it to any AxiosError it throws (e.g. on JSON parse failure).
+    // We clean it up afterwards to avoid polluting the config object.
+    config.response = response;
+    try {
+      response.data = transformData.call(config, config.transformResponse, response);
+    } finally {
+      delete config.response;
+    }
+    response.headers = AxiosHeaders.from(response.headers);
     return response;
   }, function onAdapterRejection(reason) {
     if (!isCancel(reason)) {
@@ -94198,15 +98913,15 @@ function dispatchRequest(config) {
 
       // Transform response data
       if (reason && reason.response) {
-        reason.response.data = transformData.call(
-          config,
-          config.transformResponse,
-          reason.response
-        );
-        reason.response.headers = AxiosHeaders$1.from(reason.response.headers);
+        config.response = reason.response;
+        try {
+          reason.response.data = transformData.call(config, config.transformResponse, reason.response);
+        } finally {
+          delete config.response;
+        }
+        reason.response.headers = AxiosHeaders.from(reason.response.headers);
       }
     }
-
     return Promise.reject(reason);
   });
 }
@@ -94219,7 +98934,6 @@ const validators$1 = {};
     return typeof thing === type || 'a' + (i < 1 ? 'n ' : ' ') + type;
   };
 });
-
 const deprecatedWarnings = {};
 
 /**
@@ -94233,39 +98947,28 @@ const deprecatedWarnings = {};
  */
 validators$1.transitional = function transitional(validator, version, message) {
   function formatMessage(opt, desc) {
-    return '[Axios v' + VERSION + '] Transitional option \'' + opt + '\'' + desc + (message ? '. ' + message : '');
+    return '[Axios v' + VERSION + "] Transitional option '" + opt + "'" + desc + (message ? '. ' + message : '');
   }
 
   // eslint-disable-next-line func-names
   return (value, opt, opts) => {
     if (validator === false) {
-      throw new AxiosError(
-        formatMessage(opt, ' has been removed' + (version ? ' in ' + version : '')),
-        AxiosError.ERR_DEPRECATED
-      );
+      throw new AxiosError(formatMessage(opt, ' has been removed' + (version ? ' in ' + version : '')), AxiosError.ERR_DEPRECATED);
     }
-
     if (version && !deprecatedWarnings[opt]) {
       deprecatedWarnings[opt] = true;
       // eslint-disable-next-line no-console
-      console.warn(
-        formatMessage(
-          opt,
-          ' has been deprecated since v' + version + ' and will be removed in the near future'
-        )
-      );
+      console.warn(formatMessage(opt, ' has been deprecated since v' + version + ' and will be removed in the near future'));
     }
-
     return validator ? validator(value, opt, opts) : true;
   };
 };
-
 validators$1.spelling = function spelling(correctSpelling) {
   return (value, opt) => {
     // eslint-disable-next-line no-console
     console.warn(`${opt} is likely a misspelling of ${correctSpelling}`);
     return true;
-  }
+  };
 };
 
 /**
@@ -94286,7 +98989,9 @@ function assertOptions(options, schema, allowUnknown) {
   let i = keys.length;
   while (i-- > 0) {
     const opt = keys[i];
-    const validator = schema[opt];
+    // Use hasOwnProperty so a polluted Object.prototype.<opt> cannot supply
+    // a non-function validator and cause a TypeError.
+    const validator = Object.prototype.hasOwnProperty.call(schema, opt) ? schema[opt] : undefined;
     if (validator) {
       const value = options[opt];
       const result = value === undefined || validator(value, opt, options);
@@ -94300,8 +99005,7 @@ function assertOptions(options, schema, allowUnknown) {
     }
   }
 }
-
-const validator = {
+var validator = {
   assertOptions,
   validators: validators$1
 };
@@ -94319,8 +99023,8 @@ class Axios {
   constructor(instanceConfig) {
     this.defaults = instanceConfig || {};
     this.interceptors = {
-      request: new InterceptorManager$1(),
-      response: new InterceptorManager$1()
+      request: new InterceptorManager(),
+      response: new InterceptorManager()
     };
   }
 
@@ -94338,27 +99042,35 @@ class Axios {
     } catch (err) {
       if (err instanceof Error) {
         let dummy = {};
-
-        Error.captureStackTrace ? Error.captureStackTrace(dummy) : (dummy = new Error());
+        Error.captureStackTrace ? Error.captureStackTrace(dummy) : dummy = new Error();
 
         // slice off the Error: ... line
-        const stack = dummy.stack ? dummy.stack.replace(/^.+\n/, '') : '';
+        const stack = (() => {
+          if (!dummy.stack) {
+            return '';
+          }
+          const firstNewlineIndex = dummy.stack.indexOf('\n');
+          return firstNewlineIndex === -1 ? '' : dummy.stack.slice(firstNewlineIndex + 1);
+        })();
         try {
           if (!err.stack) {
             err.stack = stack;
             // match without the 2 top stack lines
-          } else if (stack && !String(err.stack).endsWith(stack.replace(/^.+\n.+\n/, ''))) {
-            err.stack += '\n' + stack;
+          } else if (stack) {
+            const firstNewlineIndex = stack.indexOf('\n');
+            const secondNewlineIndex = firstNewlineIndex === -1 ? -1 : stack.indexOf('\n', firstNewlineIndex + 1);
+            const stackWithoutTwoTopLines = secondNewlineIndex === -1 ? '' : stack.slice(secondNewlineIndex + 1);
+            if (!String(err.stack).endsWith(stackWithoutTwoTopLines)) {
+              err.stack += '\n' + stack;
+            }
           }
         } catch (e) {
           // ignore the case where "stack" is an un-writable property
         }
       }
-
       throw err;
     }
   }
-
   _request(configOrUrl, config) {
     /*eslint no-param-reassign:0*/
     // Allow for axios('example/url'[, config]) a la fetch API
@@ -94368,19 +99080,20 @@ class Axios {
     } else {
       config = configOrUrl || {};
     }
-
     config = mergeConfig(this.defaults, config);
-
-    const {transitional, paramsSerializer, headers} = config;
-
+    const {
+      transitional,
+      paramsSerializer,
+      headers
+    } = config;
     if (transitional !== undefined) {
       validator.assertOptions(transitional, {
         silentJSONParsing: validators.transitional(validators.boolean),
         forcedJSONParsing: validators.transitional(validators.boolean),
-        clarifyTimeoutError: validators.transitional(validators.boolean)
+        clarifyTimeoutError: validators.transitional(validators.boolean),
+        legacyInterceptorReqResOrdering: validators.transitional(validators.boolean)
       }, false);
     }
-
     if (paramsSerializer != null) {
       if (utils$1.isFunction(paramsSerializer)) {
         config.paramsSerializer = {
@@ -94400,7 +99113,6 @@ class Axios {
     } else {
       config.allowAbsoluteUrls = true;
     }
-
     validator.assertOptions(config, {
       baseUrl: validators.spelling('baseURL'),
       withXsrfToken: validators.spelling('withXSRFToken')
@@ -94410,19 +99122,11 @@ class Axios {
     config.method = (config.method || this.defaults.method || 'get').toLowerCase();
 
     // Flatten headers
-    let contextHeaders = headers && utils$1.merge(
-      headers.common,
-      headers[config.method]
-    );
-
-    headers && utils$1.forEach(
-      ['delete', 'get', 'head', 'post', 'put', 'patch', 'common'],
-      (method) => {
-        delete headers[method];
-      }
-    );
-
-    config.headers = AxiosHeaders$1.concat(contextHeaders, headers);
+    let contextHeaders = headers && utils$1.merge(headers.common, headers[config.method]);
+    headers && utils$1.forEach(['delete', 'get', 'head', 'post', 'put', 'patch', 'query', 'common'], method => {
+      delete headers[method];
+    });
+    config.headers = AxiosHeaders.concat(contextHeaders, headers);
 
     // filter out skipped interceptors
     const requestInterceptorChain = [];
@@ -94431,40 +99135,35 @@ class Axios {
       if (typeof interceptor.runWhen === 'function' && interceptor.runWhen(config) === false) {
         return;
       }
-
       synchronousRequestInterceptors = synchronousRequestInterceptors && interceptor.synchronous;
-
-      requestInterceptorChain.unshift(interceptor.fulfilled, interceptor.rejected);
+      const transitional = config.transitional || transitionalDefaults;
+      const legacyInterceptorReqResOrdering = transitional && transitional.legacyInterceptorReqResOrdering;
+      if (legacyInterceptorReqResOrdering) {
+        requestInterceptorChain.unshift(interceptor.fulfilled, interceptor.rejected);
+      } else {
+        requestInterceptorChain.push(interceptor.fulfilled, interceptor.rejected);
+      }
     });
-
     const responseInterceptorChain = [];
     this.interceptors.response.forEach(function pushResponseInterceptors(interceptor) {
       responseInterceptorChain.push(interceptor.fulfilled, interceptor.rejected);
     });
-
     let promise;
     let i = 0;
     let len;
-
     if (!synchronousRequestInterceptors) {
       const chain = [dispatchRequest.bind(this), undefined];
       chain.unshift(...requestInterceptorChain);
       chain.push(...responseInterceptorChain);
       len = chain.length;
-
       promise = Promise.resolve(config);
-
       while (i < len) {
         promise = promise.then(chain[i++], chain[i++]);
       }
-
       return promise;
     }
-
     len = requestInterceptorChain.length;
-
     let newConfig = config;
-
     while (i < len) {
       const onFulfilled = requestInterceptorChain[i++];
       const onRejected = requestInterceptorChain[i++];
@@ -94475,23 +99174,18 @@ class Axios {
         break;
       }
     }
-
     try {
       promise = dispatchRequest.call(this, newConfig);
     } catch (error) {
       return Promise.reject(error);
     }
-
     i = 0;
     len = responseInterceptorChain.length;
-
     while (i < len) {
       promise = promise.then(responseInterceptorChain[i++], responseInterceptorChain[i++]);
     }
-
     return promise;
   }
-
   getUri(config) {
     config = mergeConfig(this.defaults, config);
     const fullPath = buildFullPath(config.baseURL, config.url, config.allowAbsoluteUrls);
@@ -94502,7 +99196,7 @@ class Axios {
 // Provide aliases for supported request methods
 utils$1.forEach(['delete', 'get', 'head', 'options'], function forEachMethodNoData(method) {
   /*eslint func-names:0*/
-  Axios.prototype[method] = function(url, config) {
+  Axios.prototype[method] = function (url, config) {
     return this.request(mergeConfig(config || {}, {
       method,
       url,
@@ -94510,10 +99204,7 @@ utils$1.forEach(['delete', 'get', 'head', 'options'], function forEachMethodNoDa
     }));
   };
 });
-
-utils$1.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {
-  /*eslint func-names:0*/
-
+utils$1.forEach(['post', 'put', 'patch', 'query'], function forEachMethodWithData(method) {
   function generateHTTPMethod(isForm) {
     return function httpMethod(url, data, config) {
       return this.request(mergeConfig(config || {}, {
@@ -94526,13 +99217,14 @@ utils$1.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method)
       }));
     };
   }
-
   Axios.prototype[method] = generateHTTPMethod();
 
-  Axios.prototype[method + 'Form'] = generateHTTPMethod(true);
+  // QUERY is a safe/idempotent read method; multipart form bodies don't fit
+  // its semantics, so no queryForm shorthand is generated.
+  if (method !== 'query') {
+    Axios.prototype[method + 'Form'] = generateHTTPMethod(true);
+  }
 });
-
-const Axios$1 = Axios;
 
 /**
  * A `CancelToken` is an object that can be used to request cancellation of an operation.
@@ -94546,21 +99238,16 @@ class CancelToken {
     if (typeof executor !== 'function') {
       throw new TypeError('executor must be a function.');
     }
-
     let resolvePromise;
-
     this.promise = new Promise(function promiseExecutor(resolve) {
       resolvePromise = resolve;
     });
-
     const token = this;
 
     // eslint-disable-next-line func-names
     this.promise.then(cancel => {
       if (!token._listeners) return;
-
       let i = token._listeners.length;
-
       while (i-- > 0) {
         token._listeners[i](cancel);
       }
@@ -94575,20 +99262,16 @@ class CancelToken {
         token.subscribe(resolve);
         _resolve = resolve;
       }).then(onfulfilled);
-
       promise.cancel = function reject() {
         token.unsubscribe(_resolve);
       };
-
       return promise;
     };
-
     executor(function cancel(message, config, request) {
       if (token.reason) {
         // Cancellation has already been requested
         return;
       }
-
       token.reason = new CanceledError(message, config, request);
       resolvePromise(token.reason);
     });
@@ -94612,7 +99295,6 @@ class CancelToken {
       listener(this.reason);
       return;
     }
-
     if (this._listeners) {
       this._listeners.push(listener);
     } else {
@@ -94633,18 +99315,13 @@ class CancelToken {
       this._listeners.splice(index, 1);
     }
   }
-
   toAbortSignal() {
     const controller = new AbortController();
-
-    const abort = (err) => {
+    const abort = err => {
       controller.abort(err);
     };
-
     this.subscribe(abort);
-
     controller.signal.unsubscribe = () => this.unsubscribe(abort);
-
     return controller.signal;
   }
 
@@ -94664,8 +99341,6 @@ class CancelToken {
   }
 }
 
-const CancelToken$1 = CancelToken;
-
 /**
  * Syntactic sugar for invoking a function and expanding an array for arguments.
  *
@@ -94673,7 +99348,7 @@ const CancelToken$1 = CancelToken;
  *
  *  ```js
  *  function f(x, y, z) {}
- *  var args = [1, 2, 3];
+ *  const args = [1, 2, 3];
  *  f.apply(null, args);
  *  ```
  *
@@ -94701,7 +99376,7 @@ function spread(callback) {
  * @returns {boolean} True if the payload is an error thrown by Axios, otherwise false
  */
 function isAxiosError(payload) {
-  return utils$1.isObject(payload) && (payload.isAxiosError === true);
+  return utils$1.isObject(payload) && payload.isAxiosError === true;
 }
 
 const HttpStatusCode = {
@@ -94773,14 +99448,11 @@ const HttpStatusCode = {
   OriginIsUnreachable: 523,
   TimeoutOccurred: 524,
   SslHandshakeFailed: 525,
-  InvalidSslCertificate: 526,
+  InvalidSslCertificate: 526
 };
-
 Object.entries(HttpStatusCode).forEach(([key, value]) => {
   HttpStatusCode[value] = key;
 });
-
-const HttpStatusCode$1 = HttpStatusCode;
 
 /**
  * Create an instance of Axios
@@ -94790,32 +99462,35 @@ const HttpStatusCode$1 = HttpStatusCode;
  * @returns {Axios} A new instance of Axios
  */
 function createInstance(defaultConfig) {
-  const context = new Axios$1(defaultConfig);
-  const instance = bind(Axios$1.prototype.request, context);
+  const context = new Axios(defaultConfig);
+  const instance = bind(Axios.prototype.request, context);
 
   // Copy axios.prototype to instance
-  utils$1.extend(instance, Axios$1.prototype, context, {allOwnKeys: true});
+  utils$1.extend(instance, Axios.prototype, context, {
+    allOwnKeys: true
+  });
 
   // Copy context to instance
-  utils$1.extend(instance, context, null, {allOwnKeys: true});
+  utils$1.extend(instance, context, null, {
+    allOwnKeys: true
+  });
 
   // Factory for creating new instances
   instance.create = function create(instanceConfig) {
     return createInstance(mergeConfig(defaultConfig, instanceConfig));
   };
-
   return instance;
 }
 
 // Create the default instance to be exported
-const axios = createInstance(defaults$1);
+const axios = createInstance(defaults);
 
 // Expose Axios class to allow class inheritance
-axios.Axios = Axios$1;
+axios.Axios = Axios;
 
 // Expose Cancel & CancelToken
 axios.CanceledError = CanceledError;
-axios.CancelToken = CancelToken$1;
+axios.CancelToken = CancelToken;
 axios.isCancel = isCancel;
 axios.VERSION = VERSION;
 axios.toFormData = toFormData;
@@ -94830,7 +99505,6 @@ axios.Cancel = axios.CanceledError;
 axios.all = function all(promises) {
   return Promise.all(promises);
 };
-
 axios.spread = spread;
 
 // Expose isAxiosError
@@ -94838,15 +99512,10 @@ axios.isAxiosError = isAxiosError;
 
 // Expose mergeConfig
 axios.mergeConfig = mergeConfig;
-
-axios.AxiosHeaders = AxiosHeaders$1;
-
+axios.AxiosHeaders = AxiosHeaders;
 axios.formToJSON = thing => formDataToJSON(utils$1.isHTMLForm(thing) ? new FormData(thing) : thing);
-
 axios.getAdapter = adapters.getAdapter;
-
-axios.HttpStatusCode = HttpStatusCode$1;
-
+axios.HttpStatusCode = HttpStatusCode;
 axios.default = axios;
 
 module.exports = axios;
@@ -94871,11 +99540,11 @@ module.exports = {"rE":"1.17.0"};
 
 /***/ }),
 
-/***/ 55001:
+/***/ 53823:
 /***/ ((module) => {
 
 "use strict";
-module.exports = {"version":"3.18.3"};
+module.exports = {"version":"3.19.0"};
 
 /***/ }),
 
@@ -94883,7 +99552,7 @@ module.exports = {"version":"3.18.3"};
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.1.20","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && rm -f dist/*.d.ts dist/*.d.ts.map dist/pagent.exe && rm -rf dist/build dist/lib","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \'src/**/*.ts\' \'__tests__/**/*.ts\'","lint:fix":"eslint --cache --quiet --fix && prettier --write \'src/**/*.ts\' \'__tests__/**/*.ts\'","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"1.0.4"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"validate-poweron-action","version":"1.3.7","description":"GitHub Action to validate a PowerOn on the Jack Henry™ credit union core platform","main":"src/main.ts","scripts":{"build":"ncc build src/main.ts -o dist --source-map --license licenses.txt && node -e \\"const fs=require(\'fs\'),path=require(\'path\'),dist=path.resolve(\'dist\');if(fs.existsSync(dist)){for(const entry of fs.readdirSync(dist)){if(entry.endsWith(\'.d.ts\')||entry.endsWith(\'.d.ts.map\')||entry===\'pagent.exe\')fs.rmSync(path.join(dist,entry),{force:true});}for(const entry of [\'build\',\'lib\'])fs.rmSync(path.join(dist,entry),{force:true,recursive:true});}\\"","test":"jest --coverage","lint":"eslint --cache --quiet && prettier --check \\"src/**/*.ts\\" \\"__tests__/**/*.ts\\"","lint:fix":"eslint --cache --quiet --fix && prettier --write \\"src/**/*.ts\\" \\"__tests__/**/*.ts\\"","all":"pnpm lint:fix && pnpm build && pnpm test"},"repository":{"type":"git","url":"git+https://github.com/libum-llc/validate-poweron-action.git"},"keywords":["poweron","jack henry","symitar","episys","validation","github-action"],"author":"Libum, LLC","license":"MIT","dependencies":{"@actions/core":"^1.10.1","@actions/exec":"^1.1.1","@actions/github":"^6.0.0","@libum-llc/symitar":"1.6.3"},"devDependencies":{"@types/jest":"^29.5.12","@types/node":"^20.11.0","@typescript-eslint/eslint-plugin":"^6.19.0","@typescript-eslint/parser":"^6.19.0","@vercel/ncc":"^0.38.1","eslint":"^8.56.0","eslint-plugin-github":"^4.10.1","jest":"^29.7.0","prettier":"^3.2.4","ts-jest":"^29.1.2","ts-node":"^10.9.2","typescript":"^5.3.3"}}');
 
 /***/ })
 
